@@ -1,3 +1,3 @@
 - Use `eslint-plugin-slop-refinery` as the baseline lint policy for this repository.
-- After any code change, run the `automated-checks` skill and fix any resulting problems.
+- After any code change, run the `slop-refinery-automated-checks` skill and fix any resulting problems.
 - Never disable lint rules just to get green output. Fix the code instead.

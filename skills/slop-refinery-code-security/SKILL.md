@@ -1,5 +1,5 @@
 ---
-name: code-security
+name: slop-refinery-code-security
 description: Review a Node.js, TypeScript, or JavaScript codebase for practical security risks and document the findings.
 ---
 
@@ -22,7 +22,7 @@ Use this skill when the task is security review, hardening analysis, or threat-o
 Generate the hierarchy with the skill-local script:
 
 ```bash
-npx tsx ./skills/code-security/scripts/generate-code-hierarchy.ts --source "<SOURCE_CODE>" --rigor "<SECURITY_HIERARCHY_RIGOR>" --output "<SECURITY_HIERARCHY_FILE_PATH>"
+npx tsx ./skills/slop-refinery-code-security/scripts/generate-code-hierarchy.ts --source "<SOURCE_CODE>" --rigor "<SECURITY_HIERARCHY_RIGOR>" --output "<SECURITY_HIERARCHY_FILE_PATH>"
 ```
 
 If `SECURITY_HIERARCHY_RIGOR` is not provided, default to `file`.

@@ -1,5 +1,5 @@
 ---
-name: code-simplicity
+name: slop-refinery-code-simplicity
 description: Make a Node.js, TypeScript, or JavaScript codebase simpler without changing the intended behavior.
 ---
 
@@ -22,7 +22,7 @@ Use this skill when the task is to reduce complexity, delete dead code, or tight
 Generate the hierarchy with the skill-local script, not a repo-global script:
 
 ```bash
-npx tsx ./skills/code-simplicity/scripts/generate-code-hierarchy.ts --source "<SOURCE_CODE>" --rigor "<CODE_HIERARCHY_RIGOR>" --output "<CODE_STRUCTURE_FILE_PATH>"
+npx tsx ./skills/slop-refinery-code-simplicity/scripts/generate-code-hierarchy.ts --source "<SOURCE_CODE>" --rigor "<CODE_HIERARCHY_RIGOR>" --output "<CODE_STRUCTURE_FILE_PATH>"
 ```
 
 If `CODE_HIERARCHY_RIGOR` is not provided, default to `file`.

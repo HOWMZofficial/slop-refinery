@@ -1,5 +1,5 @@
 ---
-name: setup
+name: slop-refinery-setup
 description: Set up a Node.js, TypeScript, or JavaScript repository to use slop-refinery by wiring ESLint, Prettier, package scripts, and validation commands, then verify the integration end to end.
 ---
 

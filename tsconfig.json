@@ -10,7 +10,7 @@
         "strict": true,
         "target": "ESNext"
     },
-    "exclude": ["skills/setup/references/templates"],
+    "exclude": ["skills/slop-refinery-setup/references/templates"],
     "include": [
         "eslint.config.ts",
         "eslint.format.config.ts",

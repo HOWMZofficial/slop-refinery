@@ -58,9 +58,9 @@ The intended script shape is:
 
 ## Skills
 
-General-purpose skills live in [`skills/code-simplicity`](./skills/code-simplicity), [`skills/code-security`](./skills/code-security), [`skills/automated-checks`](./skills/automated-checks), and [`skills/setup`](./skills/setup).
+General-purpose skills live in [`skills/slop-refinery-code-simplicity`](./skills/slop-refinery-code-simplicity), [`skills/slop-refinery-code-security`](./skills/slop-refinery-code-security), [`skills/slop-refinery-automated-checks`](./skills/slop-refinery-automated-checks), and [`skills/slop-refinery-setup`](./skills/slop-refinery-setup).
 
-`setup` is the consumer-onboarding skill: it tells an AI how to retrofit a TypeScript repository to `slop-refinery`, including the package dependency, ESLint flat config, Prettier config, package scripts, dependency installation, and verification commands. The consumer-facing templates now live in `skills/setup/references/templates/typescript`.
+`slop-refinery-setup` is the consumer-onboarding skill: it tells an AI how to retrofit a TypeScript repository to `slop-refinery`, including the package dependency, ESLint flat config, Prettier config, package scripts, dependency installation, and verification commands. The consumer-facing templates now live in `skills/slop-refinery-setup/references/templates/typescript`.
 
 The hierarchy generator exists only inside the hierarchy-based skills so those skills remain self-contained when copied into another repo.
 

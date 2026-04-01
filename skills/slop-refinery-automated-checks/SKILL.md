@@ -1,5 +1,5 @@
 ---
-name: automated-checks
+name: slop-refinery-automated-checks
 description: Run all automated checks and fix resulting problems to automatically ensure some code quality and correctness.
 ---
 
