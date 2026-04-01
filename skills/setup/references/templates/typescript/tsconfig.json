@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "allowImportingTsExtensions": true,
+        "esModuleInterop": true,
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "noEmit": true,
+        "rewriteRelativeImportExtensions": true,
+        "skipLibCheck": true,
+        "strict": true,
+        "target": "ESNext"
+    }
+}

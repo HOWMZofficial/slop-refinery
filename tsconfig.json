@@ -1,0 +1,22 @@
+{
+    "compilerOptions": {
+        "allowImportingTsExtensions": true,
+        "esModuleInterop": true,
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "noEmit": true,
+        "rewriteRelativeImportExtensions": true,
+        "skipLibCheck": true,
+        "strict": true,
+        "target": "ESNext"
+    },
+    "exclude": ["skills/setup/references/templates"],
+    "include": [
+        "eslint.config.ts",
+        "eslint.format.config.ts",
+        "scripts",
+        "skills",
+        "src",
+        "tests"
+    ]
+}

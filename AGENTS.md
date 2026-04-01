@@ -1,0 +1,4 @@
+- Produce the simplest code that still solves the real problem.
+- This repository is the source for the published `eslint-plugin-slop-refinery` package. Consumer-facing setup templates live under `skills/setup/references/templates`.
+- After any code change, run the `automated-checks` skill and fix any resulting problems.
+- Never disable lint rules just to get green output. Fix the code instead.

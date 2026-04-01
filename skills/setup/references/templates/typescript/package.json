@@ -1,0 +1,18 @@
+{
+    "name": "your-repo-name",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "typecheck": "tsc",
+        "format": "prettier --write . && eslint --fix --config eslint.format.config.ts .",
+        "lint": "eslint ."
+    },
+    "devDependencies": {
+        "@types/node": "^24.0.0",
+        "eslint": "^9.0.0",
+        "eslint-plugin-slop-refinery": "^0.1.0",
+        "jiti": "^2.0.0",
+        "prettier": "^3.0.0",
+        "typescript": "^5.0.0"
+    }
+}

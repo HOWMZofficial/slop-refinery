@@ -1,0 +1,68 @@
+{
+    "name": "eslint-plugin-slop-refinery",
+    "version": "0.1.0",
+    "description": "Opinionated ESLint rules and flat configs for cleaning up AI-generated TypeScript and JavaScript code.",
+    "type": "module",
+    "license": "MIT",
+    "main": "./dist/src/index.js",
+    "types": "./dist/src/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/src/index.d.ts",
+            "import": "./dist/src/index.js"
+        },
+        "./configs/recommended": {
+            "types": "./dist/src/configs/recommended.d.ts",
+            "import": "./dist/src/configs/recommended.js"
+        },
+        "./configs/strict": {
+            "types": "./dist/src/configs/strict.d.ts",
+            "import": "./dist/src/configs/strict.js"
+        },
+        "./configs/format": {
+            "types": "./dist/src/configs/format.d.ts",
+            "import": "./dist/src/configs/format.js"
+        }
+    },
+    "files": [
+        "dist/src",
+        "skills",
+        "README.md",
+        "LICENSE"
+    ],
+    "keywords": [
+        "ai",
+        "eslint",
+        "eslintplugin",
+        "javascript",
+        "typescript"
+    ],
+    "scripts": {
+        "format": "prettier --write . && eslint --fix --config eslint.format.config.ts .",
+        "lint": "eslint .",
+        "prepack": "tsx ./scripts/prepack.ts",
+        "test": "vitest run",
+        "typecheck": "tsc"
+    },
+    "peerDependencies": {
+        "eslint": "^9.0.0"
+    },
+    "dependencies": {
+        "@eslint/js": "^9.39.2",
+        "eslint-import-resolver-typescript": "^4.4.4",
+        "eslint-plugin-functional": "^9.0.2",
+        "eslint-plugin-import": "^2.32.0",
+        "eslint-plugin-perfectionist": "^5.3.0",
+        "eslint-plugin-sonarjs": "^4.0.2",
+        "typescript": "^5.9.3",
+        "typescript-eslint": "^8.52.0"
+    },
+    "devDependencies": {
+        "@types/node": "^24.9.1",
+        "eslint": "^9.39.2",
+        "jiti": "^2.6.1",
+        "prettier": "^3.7.4",
+        "tsx": "^4.21.0",
+        "vitest": "^4.0.16"
+    }
+}
