@@ -1,6 +1,6 @@
 ---
 name: slop-refinery-setup
-description: Set up a Node.js, TypeScript, or JavaScript repository to use slop-refinery by wiring ESLint, Prettier, package scripts, and validation commands, then verify the integration end to end.
+description: Set up a TypeScript repository to use slop-refinery by wiring ESLint, Prettier, package scripts, and validation commands, then verify the integration end to end.
 ---
 
 Use this skill when the task is to adopt `eslint-plugin-slop-refinery` in an existing repository, scaffold a new repository around it, or repair a broken setup.

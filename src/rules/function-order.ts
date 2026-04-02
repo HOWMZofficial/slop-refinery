@@ -64,7 +64,7 @@ export const functionOrderRule: Rule.RuleModule = {
     meta: {
         docs: {
             description:
-                'Keep exported or top-level-called functions first, followed by the helpers they use.',
+                'Order module-level functions by: (1) "main" functions = exported + top-level-called functions, in file-call order; (2) for each main, append direct callees depth-first, pre-order, skipping other mains and already-seen functions; (3) append any remaining functions in their existing file order.',
         },
         messages: {
             outOfOrder:

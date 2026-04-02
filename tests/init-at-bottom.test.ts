@@ -38,15 +38,6 @@ ruleTester.run('init-at-bottom', initAtBottomRule, {
             ],
             filename: repoPath('tests', 'fixtures', 'init-at-bottom-5.ts'),
         },
-        {
-            code: 'function boot() {}\nrun();',
-            errors: [
-                { messageId: 'initCallMissing' },
-                { messageId: 'executableStatement' },
-            ],
-            filename: repoPath('tests', 'fixtures', 'init-at-bottom-6.ts'),
-            options: [{ names: ['boot'] }],
-        },
     ],
     valid: [
         {
@@ -80,15 +71,6 @@ ruleTester.run('init-at-bottom', initAtBottomRule, {
                 'fixtures',
                 'init-at-bottom-valid-3.ts',
             ),
-        },
-        {
-            code: 'function boot() {}\nboot();',
-            filename: repoPath(
-                'tests',
-                'fixtures',
-                'init-at-bottom-valid-4.ts',
-            ),
-            options: [{ names: ['boot'] }],
         },
     ],
 });

@@ -7,10 +7,9 @@
 - `slop-refinery/function-order`
 - `slop-refinery/init-at-bottom`
 - `slop-refinery/no-default-export`
-- `slop-refinery/path-case`
 - `slop-refinery/types-at-top`
 
-The more project-specific Express, React, and path-shape rules from `pulse` are intentionally excluded.
+The more project-specific Express, React, and SQL rules from `pulse` are intentionally excluded. The recommended config also uses `eslint-plugin-check-file` to enforce kebab-case file and folder naming.
 
 ## Install
 

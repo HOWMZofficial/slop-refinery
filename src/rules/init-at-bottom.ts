@@ -2,15 +2,8 @@ import type { Rule } from 'eslint';
 
 type AnyValue = any;
 
-type InitAtBottomOptions = {
-    names?: string[];
-};
-
 export const initAtBottomRule: Rule.RuleModule = {
     create(context: AnyValue) {
-        const initNames = readInitNames(context.options?.[0]);
-        const initNamesText = [...initNames].join(', ');
-
         return {
             Program(node: AnyValue) {
                 const statements = node.body;
@@ -21,7 +14,7 @@ export const initAtBottomRule: Rule.RuleModule = {
 
                 for (let index = 0; index < statements.length; index += 1) {
                     const statement = statements[index];
-                    const callName = getInitCallName(statement, initNames);
+                    const callName = getInitCallName(statement);
                     if (callName) {
                         initCalls.push({
                             index,
@@ -41,9 +34,7 @@ export const initAtBottomRule: Rule.RuleModule = {
                             name: declaration.name,
                             node: declaration.node,
                         });
-                        if (
-                            isFunctionInitializer(declaration.name, initNames)
-                        ) {
+                        if (isFunctionInitializer(declaration.name)) {
                             initFunctions.push({
                                 index,
                                 name: declaration.name,
@@ -56,9 +47,6 @@ export const initAtBottomRule: Rule.RuleModule = {
                 if (initFunctions.length > 1) {
                     for (const initFunction of initFunctions) {
                         context.report({
-                            data: {
-                                initNames: initNamesText,
-                            },
                             messageId: 'multipleInitFunctions',
                             node: initFunction.node,
                         });
@@ -68,9 +56,6 @@ export const initAtBottomRule: Rule.RuleModule = {
                 if (initCalls.length > 1) {
                     for (const initCall of initCalls) {
                         context.report({
-                            data: {
-                                initNames: initNamesText,
-                            },
                             messageId: 'multipleInitCalls',
                             node: initCall.node,
                         });
@@ -79,14 +64,13 @@ export const initAtBottomRule: Rule.RuleModule = {
 
                 const initFunction = initFunctions[0] ?? null;
                 const initCall = initCalls[0] ?? null;
-                const initName =
-                    initFunction?.name ?? [...initNames][0] ?? 'main';
+                const initName = initFunction?.name ?? 'main';
 
                 if (initFunction) {
                     for (const functionInfo of functionInfos) {
                         if (
                             functionInfo.index < initFunction.index &&
-                            !isFunctionInitializer(functionInfo.name, initNames)
+                            !isFunctionInitializer(functionInfo.name)
                         ) {
                             context.report({
                                 data: {
@@ -145,7 +129,7 @@ export const initAtBottomRule: Rule.RuleModule = {
     meta: {
         docs: {
             description:
-                'Require entry functions such as main() or init() to be defined first and invoked last.',
+                'Require init/main functions to be defined first and invoked last.',
         },
         messages: {
             executableStatement:
@@ -158,26 +142,11 @@ export const initAtBottomRule: Rule.RuleModule = {
                 "Initialization function '{{initName}}' should be defined before helper function '{{helperName}}'.",
             initFunctionMissing:
                 "Initialization function '{{initName}}' must be defined.",
-            multipleInitCalls:
-                'Only one initialization call is allowed for the configured entry function names.',
+            multipleInitCalls: 'Only one initialization call is allowed.',
             multipleInitFunctions:
-                'Only one initialization function is allowed for the configured entry function names.',
+                'Only one initialization function named main or init is allowed.',
         },
-        schema: [
-            {
-                additionalProperties: false,
-                properties: {
-                    names: {
-                        items: {
-                            type: 'string',
-                        },
-                        minItems: 1,
-                        type: 'array',
-                    },
-                },
-                type: 'object',
-            },
-        ],
+        schema: [],
         type: 'suggestion',
     },
 };
@@ -205,21 +174,15 @@ function getFunctionDeclarations(statement: AnyValue): AnyValue[] {
     ];
 }
 
-function getInitCallName(
-    statement: AnyValue,
-    initNames: Set<string>,
-): null | string {
+function getInitCallName(statement: AnyValue): null | string {
     if (statement.type !== 'ExpressionStatement') {
         return null;
     }
 
-    return getInitCallNameFromExpression(statement.expression, initNames);
+    return getInitCallNameFromExpression(statement.expression);
 }
 
-function getInitCallNameFromExpression(
-    expression: AnyValue,
-    initNames: Set<string>,
-): null | string {
+function getInitCallNameFromExpression(expression: AnyValue): null | string {
     if (!expression) {
         return null;
     }
@@ -230,11 +193,11 @@ function getInitCallNameFromExpression(
     }
 
     if (unwrapped.type === 'AwaitExpression') {
-        return getInitCallNameFromExpression(unwrapped.argument, initNames);
+        return getInitCallNameFromExpression(unwrapped.argument);
     }
 
     if (unwrapped.type === 'UnaryExpression' && unwrapped.operator === 'void') {
-        return getInitCallNameFromExpression(unwrapped.argument, initNames);
+        return getInitCallNameFromExpression(unwrapped.argument);
     }
 
     if (unwrapped.type !== 'CallExpression') {
@@ -242,15 +205,12 @@ function getInitCallNameFromExpression(
     }
 
     const directName = getCalleeIdentifierName(unwrapped.callee);
-    if (directName && isFunctionInitializer(directName, initNames)) {
+    if (directName && isFunctionInitializer(directName)) {
         return directName;
     }
 
     if (unwrapped.callee.type === 'MemberExpression') {
-        return getInitCallNameFromExpression(
-            unwrapped.callee.object,
-            initNames,
-        );
+        return getInitCallNameFromExpression(unwrapped.callee.object);
     }
 
     return null;
@@ -321,17 +281,8 @@ function isExecutableStatement(statement: AnyValue): boolean {
     }
 }
 
-function isFunctionInitializer(name: string, initNames: Set<string>): boolean {
-    return initNames.has(name);
-}
-
-function readInitNames(option: InitAtBottomOptions | undefined): Set<string> {
-    const configuredNames = option?.names?.filter((name) => name.trim() !== '');
-    if (!configuredNames || configuredNames.length === 0) {
-        return new Set(['init', 'main']);
-    }
-
-    return new Set(configuredNames);
+function isFunctionInitializer(name: string): boolean {
+    return name === 'init' || name === 'main';
 }
 
 function unwrapExpression(node: AnyValue): AnyValue {
