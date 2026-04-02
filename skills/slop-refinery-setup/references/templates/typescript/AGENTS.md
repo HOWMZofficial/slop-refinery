@@ -1,3 +1,6 @@
-- Use `eslint-plugin-slop-refinery` as the baseline lint policy for this repository.
-- After any code change, run the `slop-refinery-automated-checks` skill and fix any resulting problems.
-- Never disable lint rules just to get green output. Fix the code instead.
+- After all code changes, run the `slop-refinery-automated-checks` skill.
+- Never disable lint rules just to get around lint errors. Fix the source of the lint errors.
+- When asked to commit and push:
+    - Stage all existing changes.
+    - Commit with a descriptive multi-line message that clearly summarizes all staged changes.
+    - Push the commit to the currently checked out branch.

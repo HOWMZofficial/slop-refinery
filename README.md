@@ -7,10 +7,10 @@
 - `slop-refinery/function-order`
 - `slop-refinery/init-at-bottom`
 - `slop-refinery/no-default-export`
-- `slop-refinery/react-component-name`
+- `slop-refinery/path-case`
 - `slop-refinery/types-at-top`
 
-The more project-specific Express, React, and path-shape rules from `pulse` are still intentionally excluded.
+The more project-specific Express, React, and path-shape rules from `pulse` are intentionally excluded.
 
 ## Install
 
@@ -26,17 +26,7 @@ import { recommendedConfig } from 'eslint-plugin-slop-refinery';
 export default [...recommendedConfig];
 ```
 
-`recommendedConfig` is the lighter entry point: the custom `slop-refinery/*` rules plus a small generic baseline.
-
-If you want the broader Pulse-style rule set, including the packaged third-party rules that `pulse` enforces, use the strict preset:
-
-```ts
-import { strictConfig } from 'eslint-plugin-slop-refinery';
-
-export default [...strictConfig];
-```
-
-`strictConfig` bundles the generic non-custom rules from `pulse`, including selected `@typescript-eslint`, `eslint-plugin-functional`, `eslint-plugin-perfectionist`, and `eslint-plugin-sonarjs` rules.
+`recommendedConfig` is the package's single lint recommendation: the custom `slop-refinery/*` rules plus the generic baseline rules that belong in the package.
 
 If you only want the deterministic sorting rules for formatting flows, use the separate format config:
 

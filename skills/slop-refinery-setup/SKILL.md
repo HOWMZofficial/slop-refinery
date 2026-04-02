@@ -23,9 +23,8 @@ Make the target repository actually usable with `slop-refinery`, not just partia
     - current `package.json`
     - current ESLint and Prettier setup
     - whether the repo is JavaScript-only or TypeScript-based
-2. Choose the lightest viable preset:
-    - default to `recommendedConfig`
-    - use `strictConfig` only when the repo is TypeScript-heavy and the task explicitly wants the broader Pulse-style rule set
+2. Choose the lint preset:
+    - use `recommendedConfig`
 3. Make the minimum set of changes needed to get the repo working.
 4. Do not replace unrelated repo conventions unless they directly block the setup.
 5. After wiring the setup, install dependencies and run the checks.
@@ -60,7 +59,7 @@ If a change is required while fixing an issue, restart from command `1`.
     - `eslint.config.*`
     - `package.json`
     - `tsconfig.json`
-6. Create or update the ESLint config to import `recommendedConfig` or `strictConfig`.
+6. Create or update the ESLint config to import `recommendedConfig`.
 7. Create or update the format-only ESLint config to import `formatConfig`.
 8. Create or update `.prettierrc` to match the baseline style when that is acceptable for the repo.
 9. Create or normalize the repo scripts:

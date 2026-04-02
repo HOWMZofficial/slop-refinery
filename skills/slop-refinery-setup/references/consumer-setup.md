@@ -22,8 +22,7 @@ npm install --save-dev prettier
 
 ## Preset Selection
 
-- Default to `recommendedConfig`.
-- Use `strictConfig` when the repo is TypeScript-heavy and explicitly wants the broader Pulse-style rule set.
+- Use `recommendedConfig`.
 - Use `formatConfig` only for formatting-only adoption flows.
 
 ## Sorting

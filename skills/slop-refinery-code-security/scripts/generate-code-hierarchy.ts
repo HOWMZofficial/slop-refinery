@@ -40,7 +40,7 @@ const INTERNAL_LABEL_BY_STATEMENT_KIND = new Map<ts.SyntaxKind, string>([
 const HELP_TEXT = `Generate deterministic checkbox hierarchies from filesystem traversal + AST analysis.
 
 Usage:
-  npx tsx <path-to-generate-code-hierarchy.ts> --source <path> [options]
+  npx tsx <path-to-slop-refinery-code-security-skill>/scripts/generate-code-hierarchy.ts --source <path> [options]
 
 Required:
   --source <path>                            Directory or file to analyze
@@ -382,9 +382,6 @@ function appendRenderedNodes(
 ): void {
     for (let index = 0; index < nodes.length; index += 1) {
         const node = nodes[index];
-        if (node === undefined) {
-            continue;
-        }
         const nodeId =
             options.parentId === null
                 ? String(index + 1)

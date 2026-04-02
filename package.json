@@ -15,10 +15,6 @@
             "types": "./dist/src/configs/recommended.d.ts",
             "import": "./dist/src/configs/recommended.js"
         },
-        "./configs/strict": {
-            "types": "./dist/src/configs/strict.d.ts",
-            "import": "./dist/src/configs/strict.js"
-        },
         "./configs/format": {
             "types": "./dist/src/configs/format.d.ts",
             "import": "./dist/src/configs/format.js"

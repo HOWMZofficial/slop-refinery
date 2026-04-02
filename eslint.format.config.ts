@@ -1,5 +1,1 @@
-import { formatConfig } from './src/index.ts';
-
-const config = [...formatConfig];
-
-export default config;
+export { default } from './eslint/format.config.ts';

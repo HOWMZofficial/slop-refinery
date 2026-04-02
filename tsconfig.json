@@ -12,6 +12,7 @@
     },
     "exclude": ["skills/slop-refinery-setup/references/templates"],
     "include": [
+        "eslint",
         "eslint.config.ts",
         "eslint.format.config.ts",
         "scripts",
