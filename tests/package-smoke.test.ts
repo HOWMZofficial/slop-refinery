@@ -12,6 +12,24 @@ import { it } from 'vitest';
 
 const repoPath = process.cwd();
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const repoPackageJson = readRepoPackageJson();
+const consumerEslintRange = repoPackageJson.peerDependencies?.eslint;
+const consumerTypeScriptRange = repoPackageJson.dependencies?.typescript;
+
+function readRepoPackageJson(): {
+    dependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+} {
+    const parsedJson = JSON.parse(
+        readFileSync(path.join(repoPath, 'package.json'), 'utf8'),
+    );
+
+    if (typeof parsedJson !== 'object' || parsedJson === null) {
+        throw new Error('Expected package.json to contain an object.');
+    }
+
+    return parsedJson;
+}
 
 function runNpm(args: string[], cwd: string, captureOutput = false): string {
     return execFileSync(npmCommand, args, {
@@ -233,12 +251,24 @@ function installPackageForConsumer(
     consumerPath: string,
     tarballPath: string,
 ): void {
+    if (consumerEslintRange === undefined) {
+        throw new Error(
+            'Expected package.json to define an eslint peer range.',
+        );
+    }
+
+    if (consumerTypeScriptRange === undefined) {
+        throw new Error(
+            'Expected package.json to define a TypeScript dependency range.',
+        );
+    }
+
     runNpm(
         [
             'install',
             '--no-package-lock',
-            'eslint@^9.0.0',
-            'typescript@^5.0.0',
+            `eslint@${consumerEslintRange}`,
+            `typescript@${consumerTypeScriptRange}`,
             tarballPath,
         ],
         consumerPath,
