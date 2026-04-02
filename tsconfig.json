@@ -8,7 +8,8 @@
         "rewriteRelativeImportExtensions": true,
         "skipLibCheck": true,
         "strict": true,
-        "target": "ESNext"
+        "target": "ESNext",
+        "types": ["node"]
     },
     "exclude": ["skills/slop-refinery-setup/references/templates"],
     "include": [

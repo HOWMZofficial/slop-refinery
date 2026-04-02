@@ -293,15 +293,18 @@ function assertFormatConfigWorks(consumerPath: string, srcPath: string): void {
         consumerPath,
     );
 
-    const formattedFile = readFileSync(
+    const formattedFile: string = readFileSync(
         path.join(srcPath, 'format-example-file.ts'),
         'utf8',
     );
+    const hasSortedAntImport =
+        formattedFile.includes("import { ant, bee } from './ants.ts';") ===
+        true;
+    const hasSortedZooImport =
+        formattedFile.includes("import { apple, zebra } from './zoo.ts';") ===
+        true;
 
-    if (
-        !formattedFile.includes("import { ant, bee } from './ants.ts';") ||
-        !formattedFile.includes("import { apple, zebra } from './zoo.ts';")
-    ) {
+    if (hasSortedAntImport === false || hasSortedZooImport === false) {
         throw new Error(
             'Expected formatConfig to sort imports in the consumer fixture.',
         );
