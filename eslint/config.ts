@@ -1,65 +1,10 @@
 import { recommendedConfig } from '../src/index.ts';
-import slopRefineryRepo from './custom-rules/index.ts';
 
 const config = [
+    {
+        ignores: ['dist/**'],
+    },
     ...recommendedConfig,
-    {
-        plugins: {
-            'slop-refinery-repo': slopRefineryRepo,
-        },
-    },
-    {
-        files: [
-            'skills/slop-refinery-code-security/scripts/generate-code-hierarchy.ts',
-        ],
-        rules: {
-            'slop-refinery-repo/require-identical-files': [
-                'error',
-                {
-                    counterpartFile:
-                        '../../slop-refinery-code-simplicity/scripts/generate-code-hierarchy.ts',
-                    normalizePatterns: [
-                        {
-                            pattern:
-                                '<path-to-slop-refinery-code-security-skill>',
-                            replacement: '<path-to-slop-refinery-skill>',
-                        },
-                        {
-                            pattern:
-                                '<path-to-slop-refinery-code-simplicity-skill>',
-                            replacement: '<path-to-slop-refinery-skill>',
-                        },
-                    ],
-                },
-            ],
-        },
-    },
-    {
-        files: [
-            'skills/slop-refinery-code-simplicity/scripts/generate-code-hierarchy.ts',
-        ],
-        rules: {
-            'slop-refinery-repo/require-identical-files': [
-                'error',
-                {
-                    counterpartFile:
-                        '../../slop-refinery-code-security/scripts/generate-code-hierarchy.ts',
-                    normalizePatterns: [
-                        {
-                            pattern:
-                                '<path-to-slop-refinery-code-security-skill>',
-                            replacement: '<path-to-slop-refinery-skill>',
-                        },
-                        {
-                            pattern:
-                                '<path-to-slop-refinery-code-simplicity-skill>',
-                            replacement: '<path-to-slop-refinery-skill>',
-                        },
-                    ],
-                },
-            ],
-        },
-    },
     {
         files: [
             'eslint/**/*.ts',

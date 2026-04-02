@@ -1,3 +1,5 @@
+import type { Linter } from 'eslint';
+
 import js from '@eslint/js';
 import checkFile from 'eslint-plugin-check-file';
 import functional from 'eslint-plugin-functional';
@@ -41,7 +43,8 @@ export const SORT_OPTIONS = {
     type: 'alphabetical',
 } as const;
 
-export const SORTING_RULES = createSortingRules(SORT_OPTIONS);
+export const SORTING_RULES: Linter.RulesRecord =
+    createSortingRules(SORT_OPTIONS);
 
 const FILE_NAMING_RULES = createFileNamingRules(SOURCE_FILE_PATTERN);
 

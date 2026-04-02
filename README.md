@@ -47,10 +47,11 @@ The intended script shape is:
 
 ## Skills
 
-General-purpose skills live in [`skills/slop-refinery-code-simplicity`](./skills/slop-refinery-code-simplicity), [`skills/slop-refinery-code-security`](./skills/slop-refinery-code-security), [`skills/slop-refinery-automated-checks`](./skills/slop-refinery-automated-checks), and [`skills/slop-refinery-setup`](./skills/slop-refinery-setup).
+This repo currently ships:
 
-`slop-refinery-setup` is the consumer-onboarding skill: it tells an AI how to retrofit a TypeScript repository to `slop-refinery`, including the package dependency, ESLint flat config, Prettier config, package scripts, dependency installation, and verification commands. The consumer-facing templates now live in `skills/slop-refinery-setup/references/templates/typescript`.
+- [`skills/slop-refinery-automated-checks`](./skills/slop-refinery-automated-checks)
+- [`skills/slop-refinery-setup`](./skills/slop-refinery-setup)
 
-The hierarchy generator exists only inside the hierarchy-based skills so those skills remain self-contained when copied into another repo.
+`slop-refinery-setup` is the onboarding skill. It tells an AI how to add the package, wire the ESLint and Prettier configs, normalize scripts, install dependencies, and run the repo checks. The consumer-facing templates live in `skills/slop-refinery-setup/references/templates/typescript`.
 
 This package is authored in TypeScript under `src/` and emits the publishable package under `dist/src` during `prepack`.
