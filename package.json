@@ -1,44 +1,26 @@
 {
     "name": "eslint-plugin-slop-refinery",
-    "version": "0.1.0",
-    "description": "Opinionated ESLint rules and flat configs for cleaning up AI-generated TypeScript and JavaScript code.",
+    "version": "0.0.0",
+    "description": "Refines AI slop into clean code: correct, simple, maintainable",
     "type": "module",
     "license": "MIT",
-    "main": "./dist/src/index.js",
-    "types": "./dist/src/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/src/index.d.ts",
             "import": "./dist/src/index.js"
-        },
-        "./configs/recommended": {
-            "types": "./dist/src/configs/recommended/index.d.ts",
-            "import": "./dist/src/configs/recommended/index.js"
-        },
-        "./configs/format": {
-            "types": "./dist/src/configs/format.d.ts",
-            "import": "./dist/src/configs/format.js"
         }
     },
     "files": [
         "dist/src",
-        "skills",
         "README.md",
         "LICENSE"
-    ],
-    "keywords": [
-        "ai",
-        "eslint",
-        "eslintplugin",
-        "javascript",
-        "typescript"
     ],
     "scripts": {
         "format": "prettier --write . && eslint --fix --config eslint.format.config.ts .",
         "lint": "eslint .",
+        "typecheck": "tsc --noEmit",
         "prepack": "tsx ./scripts/prepack.ts",
-        "test": "vitest run",
-        "typecheck": "tsc"
+        "test": "vitest run"
     },
     "peerDependencies": {
         "eslint": "^9.0.0"

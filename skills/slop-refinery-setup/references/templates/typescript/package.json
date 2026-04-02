@@ -3,16 +3,15 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "typecheck": "tsc",
         "format": "prettier --write . && eslint --fix --config eslint.format.config.ts .",
-        "lint": "eslint ."
+        "lint": "eslint .",
+        "typecheck": "tsc --noEmit"
     },
     "devDependencies": {
-        "@types/node": "^24.0.0",
-        "eslint": "^9.0.0",
-        "eslint-plugin-slop-refinery": "^0.1.0",
-        "jiti": "^2.0.0",
-        "prettier": "^3.0.0",
-        "typescript": "^5.0.0"
+        "eslint": "latest",
+        "eslint-plugin-slop-refinery": "latest",
+        "jiti": "latest",
+        "prettier": "latest",
+        "typescript": "latest"
     }
 }
