@@ -18,6 +18,8 @@
     "scripts": {
         "format": "prettier --write . && eslint --fix --config eslint.format.config.ts .",
         "lint": "eslint .",
+        "ruleset:pull": "tsx ./scripts/pull-ruleset.ts",
+        "ruleset:push": "tsx ./scripts/push-ruleset.ts",
         "typecheck": "tsc --noEmit",
         "prepack": "tsx ./scripts/prepack.ts",
         "test": "vitest run"
