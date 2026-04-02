@@ -2,7 +2,10 @@ import { recommendedConfig } from '../src/index.ts';
 
 const config = [
     {
-        ignores: ['dist/**'],
+        ignores: [
+            'dist/**',
+            'skills/slop-refinery-setup/references/templates/**',
+        ],
     },
     ...recommendedConfig,
     {
