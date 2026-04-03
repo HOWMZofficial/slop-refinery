@@ -1,0 +1,202 @@
+name: Publish to npm
+
+on:
+    push:
+        branches:
+            - main
+
+permissions:
+    contents: read
+    id-token: write
+
+concurrency:
+    cancel-in-progress: false
+    group: publish-${{ github.ref }}
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+
+            - name: Determine whether this push should publish
+              id: version_gate
+              env:
+                  BEFORE_SHA: ${{ github.event.before }}
+              run: |
+                  node <<'NODE'
+                  const fs = require('node:fs');
+                  const { execFileSync } = require('node:child_process');
+
+                  function appendOutput(name, value) {
+                      fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+                  }
+
+                  function fail(message) {
+                      console.error(message);
+                      process.exit(1);
+                  }
+
+                  function readJson(path) {
+                      return JSON.parse(fs.readFileSync(path, 'utf8'));
+                  }
+
+                  function readGitJson(spec) {
+                      try {
+                          return JSON.parse(execFileSync('git', ['show', spec], { encoding: 'utf8' }));
+                      } catch (error) {
+                          fail(`Unable to read ${spec}: ${error instanceof Error ? error.message : String(error)}`);
+                      }
+                  }
+
+                  function parseVersion(version) {
+                      const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/);
+
+                      if (match === null) {
+                          fail(`Unsupported semver version: ${version}`);
+                      }
+
+                      return {
+                          major: Number(match[1]),
+                          minor: Number(match[2]),
+                          patch: Number(match[3]),
+                          prerelease: match[4] ?? '',
+                      };
+                  }
+
+                  function compareVersion(left, right) {
+                      const parsedLeft = parseVersion(left);
+                      const parsedRight = parseVersion(right);
+
+                      for (const key of ['major', 'minor', 'patch']) {
+                          if (parsedLeft[key] > parsedRight[key]) {
+                              return 1;
+                          }
+
+                          if (parsedLeft[key] < parsedRight[key]) {
+                              return -1;
+                          }
+                      }
+
+                      if (parsedLeft.prerelease === parsedRight.prerelease) {
+                          return 0;
+                      }
+
+                      if (parsedLeft.prerelease === '') {
+                          return 1;
+                      }
+
+                      if (parsedRight.prerelease === '') {
+                          return -1;
+                      }
+
+                      return parsedLeft.prerelease.localeCompare(parsedRight.prerelease);
+                  }
+
+                  const beforeSha = process.env.BEFORE_SHA ?? '';
+
+                  if (beforeSha === '' || /^0+$/.test(beforeSha)) {
+                      appendOutput('package_name', readJson('package.json').name);
+                      appendOutput('package_version', readJson('package.json').version);
+                      appendOutput('should_publish', 'false');
+                      appendOutput('reason', 'No previous main commit was available for comparison.');
+                      process.exit(0);
+                  }
+
+                  const currentPackage = readJson('package.json');
+                  const currentLock = readJson('package-lock.json');
+                  const currentPackageVersion = currentPackage.version;
+                  const currentLockVersion = currentLock.version;
+                  const currentLockRootVersion = currentLock.packages?.['']?.version ?? currentLock.version;
+
+                  if (currentPackageVersion !== currentLockVersion || currentPackageVersion !== currentLockRootVersion) {
+                      fail(
+                          `package.json version (${currentPackageVersion}) must match package-lock.json versions (${currentLockVersion} / ${currentLockRootVersion}).`,
+                      );
+                  }
+
+                  const previousPackage = readGitJson(`${beforeSha}:package.json`);
+                  const previousLock = readGitJson(`${beforeSha}:package-lock.json`);
+                  const previousPackageVersion = previousPackage.version;
+                  const previousLockVersion = previousLock.version;
+
+                  const packageIncreased = compareVersion(currentPackageVersion, previousPackageVersion) > 0;
+                  const lockIncreased = compareVersion(currentLockVersion, previousLockVersion) > 0;
+
+                  if (packageIncreased !== lockIncreased) {
+                      fail(
+                          `package.json version (${currentPackageVersion}) and package-lock.json version (${currentLockVersion}) must increase together relative to ${beforeSha} (${previousPackageVersion} / ${previousLockVersion}).`,
+                      );
+                  }
+
+                  appendOutput('package_name', currentPackage.name);
+                  appendOutput('package_version', currentPackageVersion);
+
+                  if (!packageIncreased) {
+                      appendOutput('should_publish', 'false');
+                      appendOutput('reason', 'package.json and package-lock.json versions did not both increase.');
+                      process.exit(0);
+                  }
+
+                  appendOutput('should_publish', 'true');
+                  appendOutput('reason', 'package.json and package-lock.json versions both increased.');
+                  NODE
+
+            - name: Explain skipped publish
+              if: steps.version_gate.outputs.should_publish != 'true'
+              run: echo "${{ steps.version_gate.outputs.reason }}"
+
+            - name: Check whether this version is already published
+              if: steps.version_gate.outputs.should_publish == 'true'
+              id: npm_registry
+              env:
+                  PACKAGE_NAME: ${{ steps.version_gate.outputs.package_name }}
+                  PACKAGE_VERSION: ${{ steps.version_gate.outputs.package_version }}
+              run: |
+                  if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version --registry https://registry.npmjs.org > /dev/null 2>&1; then
+                      echo "already_published=true" >> "$GITHUB_OUTPUT"
+                      echo "Version ${PACKAGE_VERSION} is already published."
+                  else
+                      echo "already_published=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Set up Node.js
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              uses: actions/setup-node@v6
+              with:
+                  cache: npm
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org
+
+            - name: Install dependencies
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              run: npm ci
+
+            - name: Run format
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              run: npm run format
+
+            - name: Verify formatting produced no changes
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              run: git diff --exit-code
+
+            - name: Run lint
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              run: npm run lint
+
+            - name: Run typecheck
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              run: npm run typecheck
+
+            - name: Run tests
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              run: npm test
+
+            - name: Publish package
+              if: steps.version_gate.outputs.should_publish == 'true' && steps.npm_registry.outputs.already_published != 'true'
+              run: npm publish
