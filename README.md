@@ -16,6 +16,7 @@ flowchart LR
 ## Index
 
 - [Installation](#installation)
+- [Usage](#usage)
 - [Skills](#skills)
 - [ESLint Plugin](#eslint-plugin)
 - [Clean Code](#clean-code)
@@ -32,6 +33,20 @@ npx skills add HOWMZofficial/slop-refinery --skill slop-refinery-setup
 ```
 
 Then use `slop-refinery-setup` in the target repository. It will guide the AI to wire up the package, configs, scripts, and agent instructions.
+
+## Usage
+
+Right now, this repo does one thing: it helps an AI agent adopt `eslint-plugin-slop-refinery` in another repository.
+
+In practice, you use `slop-refinery-setup`. That setup skill tells your AI to install the ESLint plugin, create the repository scripts, and update the agent instructions file so those checks run after code changes.
+
+The scripts it sets up are:
+
+- `format`
+- `lint`
+- `typecheck`
+
+That is the current scope of `slop-refinery` for now.
 
 ## Skills
 
