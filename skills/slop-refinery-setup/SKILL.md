@@ -40,6 +40,10 @@ npx skills add HOWMZofficial/slop-refinery --skill slop-refinery-automated-check
 ```
 
 6. Ensure the ESLint config imports `recommendedConfig`.
+    - Do not turn off, ignore, override, or weaken any rules from `recommendedConfig`.
+    - Apply `recommendedConfig` as broadly as possible.
+    - If the repo has no existing ESLint file-pattern scoping, use the broadest applicable JS/TS file set.
+    - If the repo already applies ESLint to JS/TS source files, apply `recommendedConfig` to those same file families as well.
 7. Ensure the format config imports `formatConfig`.
 8. Ensure the repo has:
     - `typecheck`
@@ -50,6 +54,10 @@ npx skills add HOWMZofficial/slop-refinery --skill slop-refinery-automated-check
       otherwise, if `CLAUDE.md` exists, merge the guidance there instead of creating `AGENTS.md`
 9. Install dependencies.
 10. Run `slop-refinery-automated-checks` and fix any issues it surfaces.
+    - Expect validation to fail during setup. That is normal.
+    - It is common for setup to surface many linting errors at first.
+    - Fix the code or setup until validation passes.
+    - Do not disable rules, narrow rule scope, or weaken `recommendedConfig` to get to green.
 
 If setup changes are required while fixing a problem, run `slop-refinery-automated-checks` again until everything is clean.
 
@@ -57,5 +65,10 @@ If setup changes are required while fixing a problem, run `slop-refinery-automat
 
 - Prefer merging over replacing.
 - Prefer the repo's existing agent-instructions file. If the repo is using `CLAUDE.md`, update that file instead of adding a second `AGENTS.md`.
+- Do not turn off, ignore, or modify any rules from `recommendedConfig` during setup.
+- Do not narrow the scope of `recommendedConfig` unless the repo already has a broader established ESLint scope you are merging into.
+- Apply `recommendedConfig` to the broadest reasonable JS/TS file set the repo supports.
+- Expect setup to surface validation failures, often many of them.
+- Treat those failures as work to fix, not as a reason to disable or weaken rules.
 - Do not invent a placeholder `test` script.
 - Do not leave the repo partially configured.
