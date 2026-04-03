@@ -8,9 +8,9 @@ Clean code, in this repo, means code that is correct, simple, and maintainable.
 flowchart LR
     A["Unrefined Code<br/>(AI slop)"] --> B{{"Refinery"}}
     B --> C(["Clean Code"])
-    C --> D["Correct"]
-    C --> E["Simple"]
-    C --> F["Maintainable"]
+    C -.- D["Correct"]
+    C -.- E["Simple"]
+    C -.- F["Maintainable"]
 ```
 
 ## Index
