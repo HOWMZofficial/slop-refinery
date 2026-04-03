@@ -6,8 +6,11 @@ Clean code, in this repo, means code that is correct, simple, and maintainable.
 
 ```mermaid
 flowchart LR
-    A["Unrefined Code (AI slop)"] --> B["Refinery"]
-    B --> C["Clean Code (correct, simple, maintainable)"]
+    A["Unrefined Code<br/>(AI slop)"] --> B{{"Refinery"}}
+    B --> C(["Clean Code"])
+    C --> D["Correct"]
+    C --> E["Simple"]
+    C --> F["Maintainable"]
 ```
 
 ## Index
