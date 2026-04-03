@@ -6,7 +6,8 @@ export const functionOrderRule: Rule.RuleModule = {
     create(context: AnyValue) {
         return {
             'Program:exit'(node: AnyValue) {
-                const sourceCode = context.getSourceCode();
+                const sourceCode =
+                    context.sourceCode ?? context.getSourceCode();
                 const functionInfos = collectModuleFunctionInfos(node);
 
                 if (functionInfos.length < 2) {

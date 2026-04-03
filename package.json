@@ -25,25 +25,25 @@
         "test": "vitest run"
     },
     "peerDependencies": {
-        "eslint": "^9.0.0"
+        "eslint": "^10.1.0"
     },
     "dependencies": {
         "@eslint/js": "^10.0.1",
         "eslint-import-resolver-typescript": "^4.4.4",
         "eslint-plugin-check-file": "^3.3.1",
-        "eslint-plugin-functional": "^9.0.2",
-        "eslint-plugin-import": "^2.32.0",
+        "eslint-plugin-functional": "^9.0.4",
+        "eslint-plugin-import-x": "^4.16.2",
         "eslint-plugin-perfectionist": "^5.8.0",
         "eslint-plugin-sonarjs": "^4.0.2",
         "typescript": "^6.0.2",
-        "typescript-eslint": "^8.52.0"
+        "typescript-eslint": "^8.58.0"
     },
     "devDependencies": {
         "@types/node": "^25.5.0",
-        "eslint": "^9.39.2",
+        "eslint": "^10.1.0",
         "jiti": "^2.6.1",
-        "prettier": "^3.7.4",
+        "prettier": "^3.8.1",
         "tsx": "^4.21.0",
-        "vitest": "^4.0.16"
+        "vitest": "^4.1.2"
     }
 }

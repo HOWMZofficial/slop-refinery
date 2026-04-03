@@ -3,7 +3,7 @@ import type { Linter } from 'eslint';
 import js from '@eslint/js';
 import checkFile from 'eslint-plugin-check-file';
 import functional from 'eslint-plugin-functional';
-import importPlugin from 'eslint-plugin-import';
+import { importX } from 'eslint-plugin-import-x';
 import perfectionist from 'eslint-plugin-perfectionist';
 import sonarjs from 'eslint-plugin-sonarjs';
 import tseslint from 'typescript-eslint';
@@ -49,11 +49,11 @@ export const SORTING_RULES: Linter.RulesRecord =
 const FILE_NAMING_RULES = createFileNamingRules(SOURCE_FILE_PATTERN);
 
 const IMPORT_SETTINGS = {
-    'import/extensions': [...SOURCE_EXTENSIONS],
-    'import/parsers': {
+    'import-x/extensions': [...SOURCE_EXTENSIONS],
+    'import-x/parsers': {
         '@typescript-eslint/parser': [...SOURCE_EXTENSIONS],
     },
-    'import/resolver': {
+    'import-x/resolver': {
         typescript: true,
     },
 } as const;
@@ -75,7 +75,7 @@ export const recommendedConfig = tseslint.config(
         plugins: {
             'check-file': checkFile,
             functional,
-            import: importPlugin,
+            'import-x': importX,
             perfectionist,
             'slop-refinery': slopRefinery,
             sonarjs,
