@@ -2,15 +2,13 @@
 
 Even the best frontier coding models generate AI slop by default. They can produce code that works well enough to ship a feature, but not code that is consistently clean. `slop-refinery` exists to help AI agents refine that output into clean code.
 
+Clean code, in this repo, means code that is correct, simple, and maintainable.
+
 ```mermaid
 flowchart LR
-    A["AI Slop"] --> B["slop-refinery"]
-    B --> C["Correct Code"]
-    B --> D["Simple Code"]
-    B --> E["Maintainable Code"]
+    A["Unrefined Code (AI slop)"] --> B["Refinery"]
+    B --> C["Clean Code (correct, simple, maintainable)"]
 ```
-
-Clean code, in this repo, means code that is correct, simple, and maintainable.
 
 ## Index
 
