@@ -34,11 +34,9 @@ Workaround for the current `skills` dotfile-copy bug:
     - whether the repo uses `AGENTS.md` or `CLAUDE.md` for agent instructions
 3. Merge the templates into the repo. Do not blindly replace unrelated conventions.
     - Write `references/templates/typescript/prettierrc` to the target repo as `.prettierrc`.
-4. Ensure the repo has the needed dev dependencies:
-    - `eslint`
-    - `eslint-plugin-slop-refinery`
-    - `jiti` when using `eslint.config.ts` or `eslint.format.config.ts`
-    - `prettier` if it is missing
+4. Ensure the repo has the dev dependencies specified in `references/templates/typescript/package.json`.
+    - Treat that template file as the source of truth instead of duplicating the dependency list here.
+    - Merge those dev dependencies into the target repo instead of dropping unrelated existing dependencies.
 5. Ensure `slop-refinery-quick-checks` is installed. If it is missing, install it with:
 
 ```bash
