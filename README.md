@@ -26,7 +26,7 @@ flowchart LR
 
 ## Installation
 
-Use `npx skills`. Right now, the only thing you need to install from this repo is the setup skill.
+Use `npx skills`. For most repositories, start with the setup skill.
 
 ```bash
 npx skills add HOWMZofficial/slop-refinery --skill slop-refinery-setup
@@ -36,9 +36,13 @@ Then use `slop-refinery-setup` in the target repository. It will guide the AI to
 
 ## Usage
 
-Right now, this repo does one thing: it helps an AI agent adopt `eslint-plugin-slop-refinery` in another repository.
+Right now, this repo mainly helps an AI agent adopt `eslint-plugin-slop-refinery` in another repository.
 
 In practice, you use `slop-refinery-setup`. That setup skill tells your AI to install the ESLint plugin, create the repository scripts, and update the agent instructions file so those checks run after code changes.
+
+`slop-refinery-quick-checks` is meant to be the fast validation loop. It should run the automated checks that are quick enough to execute after each set of changes an AI makes, not only at the end of a longer task.
+
+This repo also includes `slop-refinery-eslint-tests`, a focused skill for writing tests for custom ESLint rules without assuming a fixed directory layout.
 
 The scripts it sets up are:
 
@@ -52,8 +56,9 @@ That is the current scope of `slop-refinery` for now.
 
 Current skills:
 
+- `slop-refinery-eslint-tests`: writes tests for custom ESLint rules while following the repo's existing test layout.
 - `slop-refinery-setup`: adopts the `slop-refinery` skills and `eslint-plugin-slop-refinery` in a repository.
-- `slop-refinery-automated-checks`: runs the repository's automated checks in the expected order.
+- `slop-refinery-quick-checks`: runs the repository's fast automated checks after each set of changes.
 
 ## ESLint Plugin
 
