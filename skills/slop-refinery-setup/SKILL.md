@@ -35,7 +35,6 @@ Workaround for the current `skills` dotfile-copy bug:
 3. Merge the templates into the repo. Do not blindly replace unrelated conventions.
     - Write `references/templates/typescript/prettierrc` to the target repo as `.prettierrc`.
 4. Ensure the repo has the dev dependencies specified in `references/templates/typescript/package.json`.
-    - Treat that template file as the source of truth instead of duplicating the dependency list here.
     - Merge those dev dependencies into the target repo instead of dropping unrelated existing dependencies.
 5. Ensure `slop-refinery-quick-checks` is installed. If it is missing, install it with:
 
