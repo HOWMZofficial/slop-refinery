@@ -33,7 +33,7 @@
         "ruleset:push": "tsx ./src/cli/bin.ts ruleset push",
         "typecheck": "tsc --noEmit",
         "prepack": "tsx ./scripts/prepack.ts",
-        "test": "vitest run"
+        "test": "vitest run --exclude dist/**"
     },
     "dependencies": {
         "@eslint/js": "^10.0.1",
