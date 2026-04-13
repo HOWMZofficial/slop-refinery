@@ -1,4 +1,4 @@
-import { formatConfig } from 'eslint-plugin-slop-refinery';
+import { formatConfig } from 'slop-refinery/eslint-plugin';
 
 const config = [...formatConfig];
 

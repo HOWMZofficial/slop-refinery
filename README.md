@@ -17,6 +17,8 @@ flowchart LR
 
 - [Installation](#installation)
 - [Usage](#usage)
+- [TypeScript API](#typescript-api)
+- [CLI](#cli)
 - [Skills](#skills)
 - [ESLint Plugin](#eslint-plugin)
 - [Clean Code](#clean-code)
@@ -36,9 +38,13 @@ Then use `slop-refinery-setup` in the target repository. It will guide the AI to
 
 ## Usage
 
-Right now, this repo mainly helps an AI agent adopt `eslint-plugin-slop-refinery` in another repository.
+`slop-refinery` is a single npm package with three surfaces:
 
-In practice, you use `slop-refinery-setup`. That setup skill tells your AI to install the ESLint plugin, create the repository scripts, and update the agent instructions file so those checks run after code changes.
+- `slop-refinery` for the ruleset CLI
+- `slop-refinery` for the TypeScript ruleset API
+- `slop-refinery/eslint-plugin` for the ESLint plugin and configs
+
+In practice, the easiest adoption path is still `slop-refinery-setup`. That setup skill tells your AI to install the package, create the repository scripts, and update the agent instructions file so those checks run after code changes.
 
 `slop-refinery-quick-checks` is meant to be the fast validation loop. It should run the automated checks that are quick enough to execute after each set of changes an AI makes, not only at the end of a longer task.
 
@@ -50,19 +56,38 @@ The scripts it sets up are:
 - `lint`
 - `typecheck`
 
-That is the current scope of `slop-refinery` for now.
+## TypeScript API
+
+```ts
+import { pullRuleset, pushRuleset } from 'slop-refinery';
+```
+
+The root package exports the ruleset library API plus file helpers like `readRulesetFile`, `writeRulesetFile`, `getDefaultRulesetPath`, and `normalizeRuleset`.
+
+## CLI
+
+```bash
+slop-refinery ruleset pull
+slop-refinery ruleset push
+```
+
+The CLI targets the repository identified by the current checkout's `origin` Git remote. It requires `gh` to be installed and authenticated for ruleset access.
 
 ## Skills
 
 Current skills:
 
 - `slop-refinery-eslint-tests`: writes tests for custom ESLint rules while following the repo's existing test layout.
-- `slop-refinery-setup`: adopts the `slop-refinery` skills and `eslint-plugin-slop-refinery` in a repository.
+- `slop-refinery-setup`: adopts the `slop-refinery` skills and package in a repository.
 - `slop-refinery-quick-checks`: runs the repository's fast automated checks after each set of changes.
 
 ## ESLint Plugin
 
-This repo publishes [`eslint-plugin-slop-refinery`](https://www.npmjs.com/package/eslint-plugin-slop-refinery).
+This repo publishes [`slop-refinery`](https://www.npmjs.com/package/slop-refinery). The ESLint plugin lives at the `slop-refinery/eslint-plugin` subpath.
+
+```ts
+import { formatConfig, recommendedConfig } from 'slop-refinery/eslint-plugin';
+```
 
 The ESLint plugin attempts to codify and automate best practices that are quick and easy for an AI agent to verify against.
 

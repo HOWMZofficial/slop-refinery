@@ -13,12 +13,14 @@ import { it } from 'vitest';
 const repoPath = process.cwd();
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const repoPackageJson = readRepoPackageJson();
-const consumerEslintRange = repoPackageJson.peerDependencies?.eslint;
-const consumerTypeScriptRange = repoPackageJson.dependencies?.typescript;
+const consumerEslintRange = repoPackageJson.devDependencies?.eslint;
+const consumerResolverRange =
+    repoPackageJson.devDependencies?.['eslint-import-resolver-typescript'];
+const consumerTypeScriptRange = repoPackageJson.devDependencies?.typescript;
 
 function readRepoPackageJson(): {
     dependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
 } {
     const parsedJson = JSON.parse(
         readFileSync(path.join(repoPath, 'package.json'), 'utf8'),
@@ -115,7 +117,7 @@ function writeConsumerConfigFiles(consumerPath: string): void {
     writeFile(
         path.join(consumerPath, 'eslint.config.mjs'),
         `
-            import { recommendedConfig } from 'eslint-plugin-slop-refinery';
+            import { recommendedConfig } from 'slop-refinery/eslint-plugin';
 
             export default [...recommendedConfig];
         `,
@@ -123,7 +125,7 @@ function writeConsumerConfigFiles(consumerPath: string): void {
     writeFile(
         path.join(consumerPath, 'eslint.format.config.mjs'),
         `
-            import { formatConfig } from 'eslint-plugin-slop-refinery';
+            import { formatConfig } from 'slop-refinery/eslint-plugin';
 
             export default [...formatConfig];
         `,
@@ -135,10 +137,37 @@ function writeConsumerSmokeFiles(consumerPath: string): void {
         path.join(consumerPath, 'smoke.mjs'),
         `
             import {
+                getDefaultRulesetPath,
+                normalizeRuleset,
+                pullRuleset,
+                pushRuleset,
+                readRulesetFile,
+                writeRulesetFile,
+            } from 'slop-refinery';
+            import {
                 formatConfig,
                 recommendedConfig,
                 slopRefinery,
-            } from 'eslint-plugin-slop-refinery';
+            } from 'slop-refinery/eslint-plugin';
+
+            const rulesetPath = getDefaultRulesetPath({
+                branch: 'release',
+                cwd: process.cwd(),
+            });
+            const normalizedRuleset = normalizeRuleset({
+                bypass_actors: [],
+                conditions: {
+                    ref_name: {
+                        exclude: [],
+                        include: ['refs/heads/release'],
+                    },
+                },
+                enforcement: 'active',
+                id: 1,
+                name: 'release branch',
+                rules: [],
+                target: 'branch',
+            });
 
             if (!Array.isArray(formatConfig)) {
                 throw new Error('Expected formatConfig to be an array.');
@@ -151,6 +180,20 @@ function writeConsumerSmokeFiles(consumerPath: string): void {
             if (typeof slopRefinery !== 'object' || slopRefinery === null) {
                 throw new Error('Expected slopRefinery to be an object.');
             }
+
+            if (typeof pullRuleset !== 'function') {
+                throw new Error('Expected pullRuleset to be a function.');
+            }
+
+            if (typeof pushRuleset !== 'function') {
+                throw new Error('Expected pushRuleset to be a function.');
+            }
+
+            writeRulesetFile(rulesetPath, normalizedRuleset);
+
+            if (readRulesetFile(rulesetPath).name !== 'release branch') {
+                throw new Error('Expected readRulesetFile to read the written ruleset.');
+            }
         `,
     );
     writeFile(
@@ -161,16 +204,44 @@ function writeConsumerSmokeFiles(consumerPath: string): void {
                 formatConfig,
                 recommendedConfig,
                 slopRefinery,
-            } from 'eslint-plugin-slop-refinery';
+            } from 'slop-refinery/eslint-plugin';
+            import {
+                getDefaultRulesetPath,
+                normalizeRuleset,
+                type PullRulesetOptions,
+                type PushRulesetOptions,
+            } from 'slop-refinery';
 
             const recommended: ReturnType<typeof ESLint.prototype.calculateConfigForFile> | undefined =
                 undefined;
             const configs = [recommendedConfig, formatConfig];
             const pluginName = slopRefinery.meta?.name;
+            const rulesetOptions: PullRulesetOptions | PushRulesetOptions = {
+                owner: 'HOWMZofficial',
+                repo: 'slop-refinery',
+            };
+            const rulesetPath = getDefaultRulesetPath();
+            const ruleset = normalizeRuleset({
+                bypass_actors: [],
+                conditions: {
+                    ref_name: {
+                        exclude: [],
+                        include: ['refs/heads/main'],
+                    },
+                },
+                enforcement: 'active',
+                id: 1,
+                name: 'main branch',
+                rules: [],
+                target: 'branch',
+            });
 
             void recommended;
             void configs;
             void pluginName;
+            void rulesetOptions;
+            void rulesetPath;
+            void ruleset;
         `,
     );
 }
@@ -253,13 +324,19 @@ function installPackageForConsumer(
 ): void {
     if (consumerEslintRange === undefined) {
         throw new Error(
-            'Expected package.json to define an eslint peer range.',
+            'Expected package.json to define an eslint devDependency range.',
         );
     }
 
     if (consumerTypeScriptRange === undefined) {
         throw new Error(
-            'Expected package.json to define a TypeScript dependency range.',
+            'Expected package.json to define a TypeScript devDependency range.',
+        );
+    }
+
+    if (consumerResolverRange === undefined) {
+        throw new Error(
+            'Expected package.json to define an eslint-import-resolver-typescript devDependency range.',
         );
     }
 
@@ -268,6 +345,7 @@ function installPackageForConsumer(
             'install',
             '--no-package-lock',
             `eslint@${consumerEslintRange}`,
+            `eslint-import-resolver-typescript@${consumerResolverRange}`,
             `typescript@${consumerTypeScriptRange}`,
             tarballPath,
         ],
@@ -281,6 +359,20 @@ function assertConsumerImportsWork(consumerPath: string): void {
         stdio: 'inherit',
     });
     runNpm(['exec', '--', 'tsc', '--noEmit'], consumerPath);
+}
+
+function assertCliWorks(consumerPath: string): void {
+    const helpOutput = runNpm(
+        ['exec', '--', 'slop-refinery', '--help'],
+        consumerPath,
+        true,
+    );
+
+    if (helpOutput.includes('slop-refinery ruleset pull') === false) {
+        throw new Error(
+            'Expected installed CLI help to describe ruleset pull.',
+        );
+    }
 }
 
 function assertRecommendedConfigWorks(consumerPath: string): void {
@@ -378,6 +470,7 @@ function runPackageSmokeTest(): void {
 
         installPackageForConsumer(consumerPath, tarballPath);
         assertConsumerImportsWork(consumerPath);
+        assertCliWorks(consumerPath);
         assertRecommendedConfigWorks(consumerPath);
         assertFormatConfigWorks(consumerPath, srcPath);
     } finally {

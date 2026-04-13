@@ -1,4 +1,4 @@
-import { typesAtTopRule } from '../src/rules/types-at-top.ts';
+import { typesAtTopRule } from '../src/eslint-plugin/rules/types-at-top.ts';
 import { createTypeScriptRuleTester, repoPath } from './test-harness.ts';
 
 const ruleTester = createTypeScriptRuleTester();

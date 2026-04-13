@@ -1,4 +1,4 @@
-import { functionOrderRule } from '../src/rules/function-order.ts';
+import { functionOrderRule } from '../src/eslint-plugin/rules/function-order.ts';
 import { createTypeScriptRuleTester, repoPath } from './test-harness.ts';
 
 const ruleTester = createTypeScriptRuleTester();

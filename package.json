@@ -1,6 +1,6 @@
 {
-    "name": "eslint-plugin-slop-refinery",
-    "version": "0.0.3",
+    "name": "slop-refinery",
+    "version": "0.0.0",
     "description": "Refines AI slop into clean code: correct, simple, maintainable",
     "type": "module",
     "license": "MIT",
@@ -10,9 +10,16 @@
     },
     "exports": {
         ".": {
-            "types": "./dist/src/index.d.ts",
-            "import": "./dist/src/index.js"
+            "types": "./dist/src/lib/index.d.ts",
+            "import": "./dist/src/lib/index.js"
+        },
+        "./eslint-plugin": {
+            "types": "./dist/src/eslint-plugin/index.d.ts",
+            "import": "./dist/src/eslint-plugin/index.js"
         }
+    },
+    "bin": {
+        "slop-refinery": "./dist/src/cli/bin.js"
     },
     "files": [
         "dist/src",
@@ -22,31 +29,28 @@
     "scripts": {
         "format": "prettier --write . && eslint --fix --config eslint.format.config.ts .",
         "lint": "eslint .",
-        "ruleset:pull": "tsx ./scripts/pull-ruleset.ts",
-        "ruleset:push": "tsx ./scripts/push-ruleset.ts",
+        "ruleset:pull": "tsx ./src/cli/bin.ts ruleset pull",
+        "ruleset:push": "tsx ./src/cli/bin.ts ruleset push",
         "typecheck": "tsc --noEmit",
         "prepack": "tsx ./scripts/prepack.ts",
         "test": "vitest run"
     },
-    "peerDependencies": {
-        "eslint": "^10.1.0"
-    },
     "dependencies": {
         "@eslint/js": "^10.0.1",
-        "eslint-import-resolver-typescript": "^4.4.4",
         "eslint-plugin-check-file": "^3.3.1",
         "eslint-plugin-functional": "^9.0.4",
         "eslint-plugin-import-x": "^4.16.2",
         "eslint-plugin-perfectionist": "^5.8.0",
         "eslint-plugin-sonarjs": "^4.0.2",
-        "typescript": "^6.0.2",
         "typescript-eslint": "^8.58.0"
     },
     "devDependencies": {
         "@types/node": "^25.5.0",
         "eslint": "^10.1.0",
+        "eslint-import-resolver-typescript": "^4.4.4",
         "jiti": "^2.6.1",
         "prettier": "^3.8.1",
+        "typescript": "^6.0.2",
         "tsx": "^4.21.0",
         "vitest": "^4.1.2"
     }

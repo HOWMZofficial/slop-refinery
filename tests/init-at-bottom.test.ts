@@ -1,4 +1,4 @@
-import { initAtBottomRule } from '../src/rules/init-at-bottom.ts';
+import { initAtBottomRule } from '../src/eslint-plugin/rules/init-at-bottom.ts';
 import { createTypeScriptRuleTester, repoPath } from './test-harness.ts';
 
 const ruleTester = createTypeScriptRuleTester();

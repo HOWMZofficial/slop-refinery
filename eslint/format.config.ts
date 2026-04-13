@@ -1,4 +1,4 @@
-import { formatConfig } from '../src/index.ts';
+import { formatConfig } from '../src/eslint-plugin/index.ts';
 
 const config = [
     {
