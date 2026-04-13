@@ -1,4 +1,4 @@
-import { noDefaultExportRule } from '../src/rules/no-default-export.ts';
+import { noDefaultExportRule } from '../src/eslint-plugin/rules/no-default-export.ts';
 import { createTypeScriptRuleTester, repoPath } from './test-harness.ts';
 
 const ruleTester = createTypeScriptRuleTester();

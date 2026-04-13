@@ -3,7 +3,7 @@ name: slop-refinery-setup
 description: Set up a TypeScript repository to use slop-refinery by wiring ESLint, Prettier, package scripts, and validation commands, then verify the integration end to end.
 ---
 
-Use this skill when the task is to adopt the `slop-refinery` skill set and `eslint-plugin-slop-refinery` in a TypeScript repository or fix an existing setup.
+Use this skill when the task is to adopt the `slop-refinery` skill set and the `slop-refinery/eslint-plugin` plugin surface in a TypeScript repository or fix an existing setup.
 
 ## Goal
 

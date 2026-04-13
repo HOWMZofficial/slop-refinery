@@ -1,4 +1,4 @@
-import { recommendedConfig } from '../src/index.ts';
+import { recommendedConfig } from '../src/eslint-plugin/index.ts';
 
 const config = [
     {
@@ -25,10 +25,11 @@ const config = [
     },
     {
         files: [
+            'src/cli/**/*.ts',
             'eslint/**/*.ts',
             'scripts/**/*.ts',
             'skills/**/*.ts',
-            'src/rules/**/*.ts',
+            'src/eslint-plugin/rules/**/*.ts',
             'tests/test-harness.ts',
         ],
         rules: {

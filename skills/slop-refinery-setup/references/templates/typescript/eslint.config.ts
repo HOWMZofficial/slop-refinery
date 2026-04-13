@@ -1,4 +1,4 @@
-import { recommendedConfig } from 'eslint-plugin-slop-refinery';
+import { recommendedConfig } from 'slop-refinery/eslint-plugin';
 
 const config = [...recommendedConfig];
 

@@ -9,9 +9,10 @@
     },
     "devDependencies": {
         "eslint": "latest",
-        "eslint-plugin-slop-refinery": "latest",
+        "eslint-import-resolver-typescript": "latest",
         "jiti": "latest",
         "prettier": "latest",
+        "slop-refinery": "latest",
         "typescript": "latest"
     }
 }
