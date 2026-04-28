@@ -41,6 +41,7 @@ Then use `slop-refinery-setup` in the target repository. It will guide the AI to
 `slop-refinery` is a single npm package with three surfaces:
 
 - `slop-refinery` for the ruleset CLI
+- `slop-refinery` for the git cleanup CLI
 - `slop-refinery` for the TypeScript ruleset API
 - `slop-refinery/eslint-plugin` for the ESLint plugin and configs
 
@@ -59,19 +60,24 @@ The scripts it sets up are:
 ## TypeScript API
 
 ```ts
-import { pullRuleset, pushRuleset } from 'slop-refinery';
+import { buildGitCleanupReport, pullRuleset, pushRuleset } from 'slop-refinery';
 ```
 
-The root package exports the ruleset library API plus file helpers like `readRulesetFile`, `writeRulesetFile`, `getDefaultRulesetPath`, and `normalizeRuleset`.
+The root package exports the ruleset library API, the git cleanup library API, and file helpers like `readRulesetFile`, `writeRulesetFile`, `getDefaultRulesetPath`, and `normalizeRuleset`.
 
 ## CLI
 
 ```bash
 slop-refinery ruleset pull
 slop-refinery ruleset push
+slop-refinery git-cleanup
+slop-refinery git-cleanup --prune-archives
+slop-refinery git-cleanup --apply --keep-archives
 ```
 
 The CLI targets the repository identified by the current checkout's `origin` Git remote. It requires `gh` to be installed and authenticated for ruleset access.
+
+`slop-refinery git-cleanup` audits local branches and worktrees against `origin`'s live default branch. `slop-refinery git-cleanup --apply` only deletes branches when both the local branch history and the live `origin` branch are already preserved on that canonical base, no linked worktree still points at the branch, and no rewrite overlays are active. It archives branch names during the operation, then prunes redundant tool-managed archive refs after their tips and reflogs are proven preserved on the live canonical base. Use `--keep-archives` with `--apply` to retain those safety refs for manual review. `slop-refinery git-cleanup --prune-archives` can also run standalone to clean up older redundant archives.
 
 ## Skills
 

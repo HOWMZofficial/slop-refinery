@@ -373,6 +373,10 @@ function assertCliWorks(consumerPath: string): void {
             'Expected installed CLI help to describe ruleset pull.',
         );
     }
+
+    if (helpOutput.includes('slop-refinery git-cleanup') === false) {
+        throw new Error('Expected installed CLI help to describe git-cleanup.');
+    }
 }
 
 function assertRecommendedConfigWorks(consumerPath: string): void {
