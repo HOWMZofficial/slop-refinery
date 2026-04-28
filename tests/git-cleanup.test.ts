@@ -193,7 +193,18 @@ function commitFile(
 function createUnreferencedCommit(cwd: string, message: string): string {
     const treeSha = git(cwd, ['rev-parse', 'main^{tree}']);
 
-    return git(cwd, ['commit-tree', treeSha, '-p', 'main', '-m', message]);
+    return git(cwd, [
+        '-c',
+        'user.email=slop-refinery@example.com',
+        '-c',
+        'user.name=Slop Refinery Tests',
+        'commit-tree',
+        treeSha,
+        '-p',
+        'main',
+        '-m',
+        message,
+    ]);
 }
 
 function createMergedFeatureBranch(
@@ -2120,13 +2131,13 @@ function createOriginPrefixedRemoteNameFixture(): GitFixture {
     createCanonicalFooFeatureBranch(fixture.repoPath);
     git(
         fixture.repoPath,
-        ['remote', 'add', 'origin/foo', otherOriginPath],
+        ['remote', 'add', 'origin-foo', otherOriginPath],
         false,
     );
     git(fixture.repoPath, ['checkout', 'foo/feature'], false);
     git(
         fixture.repoPath,
-        ['push', '-u', 'origin/foo', 'foo/feature:feature'],
+        ['push', '-u', 'origin-foo', 'foo/feature:feature'],
         false,
     );
     git(fixture.repoPath, ['checkout', 'main'], false);
@@ -2157,7 +2168,7 @@ function expectOriginPrefixedRemoteNeedsReview(
         'foo/feature',
     );
 
-    expect(reviewBranch?.remoteBranch?.remote).toBe('origin/foo');
+    expect(reviewBranch?.remoteBranch?.remote).toBe('origin-foo');
     expect(reviewBranch?.remoteBranch?.branch).toBe('feature');
     expect(reviewBranch?.reasonCodes).toContain(
         'origin_branch_non_origin_upstream',
