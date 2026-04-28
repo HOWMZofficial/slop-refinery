@@ -1,6 +1,6 @@
 {
     "name": "slop-refinery",
-    "version": "0.0.4",
+    "version": "0.0.5",
     "description": "Refines AI slop into clean code: correct, simple, maintainable",
     "type": "module",
     "license": "MIT",
@@ -40,18 +40,18 @@
         "eslint-plugin-check-file": "^3.3.1",
         "eslint-plugin-functional": "^9.0.4",
         "eslint-plugin-import-x": "^4.16.2",
-        "eslint-plugin-perfectionist": "^5.8.0",
-        "eslint-plugin-sonarjs": "^4.0.2",
-        "typescript-eslint": "^8.58.0"
+        "eslint-plugin-perfectionist": "^5.9.0",
+        "eslint-plugin-sonarjs": "^4.0.3",
+        "typescript-eslint": "^8.59.1"
     },
     "devDependencies": {
-        "@types/node": "^25.5.0",
-        "eslint": "^10.1.0",
+        "@types/node": "^25.6.0",
+        "eslint": "^10.2.1",
         "eslint-import-resolver-typescript": "^4.4.4",
         "jiti": "^2.6.1",
-        "prettier": "^3.8.1",
-        "typescript": "^6.0.2",
+        "prettier": "^3.8.3",
         "tsx": "^4.21.0",
-        "vitest": "^4.1.2"
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.5"
     }
 }
