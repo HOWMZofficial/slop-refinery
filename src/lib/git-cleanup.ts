@@ -425,6 +425,34 @@ type RemoteDeleteResult = {
     skippedReason: null | string;
 };
 
+type RecordedRemoteArchive = {
+    archivedSha: string;
+    backupRef: string;
+    backupReflogPrefix: string;
+    backupRepoPath: string;
+};
+
+type HostedRemoteDeleteBaseValidation =
+    | {
+          base: BaseRef;
+          status: 'ready';
+      }
+    | {
+          result: RemoteDeleteResult;
+          status: 'blocked';
+      };
+
+type HostedRemoteDeleteValidation =
+    | {
+          liveBranchProbe: Extract<LiveOriginBranchProbe, { kind: 'present' }>;
+          liveSha: string;
+          status: 'ready';
+      }
+    | {
+          result: RemoteDeleteResult;
+          status: 'blocked';
+      };
+
 type WorktreeArchiveSummary = {
     errors: string[];
     removedWorktrees: string[];
@@ -1172,8 +1200,9 @@ export function getGitCleanupUsage(): string {
         '',
         'Safety model:',
         '  origin must exist and its live default branch is the only canonical base.',
-        '  Automatic cleanup only removes active branch names whose local and origin history are already preserved on that base.',
-        '  Safe branches are archived into tool-managed refs before their active branch names are removed, so branch reflogs stay preserved.',
+        '  Automatic cleanup only removes branch names whose current local and origin tips are already preserved on that base.',
+        '  Local branches are archived into tool-managed refs before their active branch names are removed, so branch reflogs stay preserved.',
+        '  Hosted origin branches are deleted with a force-with-lease guard after their live SHA is revalidated.',
         '  Successful --apply runs prune redundant tool-managed archive refs unless --keep-archives is set.',
         '  Archive pruning only removes refs whose tip and reflog history are already preserved on the canonical base.',
         '  Linked worktrees always require manual review.',
@@ -1398,32 +1427,11 @@ function reconcileBranchesWithFinalProof(
     branches: BranchBuckets,
     finalDetachedWorktreeReports: FinalDetachedWorktreeReports,
 ): BranchBuckets {
-    const finalProofIssue =
-        finalDetachedWorktreeReports.baseIssue ??
-        finalDetachedWorktreeReports.repositoryIssue;
+    const finalProofIssue = finalDetachedWorktreeReports.baseIssue;
 
     return finalProofIssue === null
-        ? reconcileBranchesWithFinalDetachedWorktrees(
-              branches,
-              finalDetachedWorktreeReports.detachedWorktrees,
-          )
-        : failClosedSafeDeleteBranches(branches, finalProofIssue);
-}
-
-function reconcileBranchesWithFinalDetachedWorktrees(
-    branches: BranchBuckets,
-    detachedWorktrees: readonly DetachedWorktreeReport[],
-): BranchBuckets {
-    const blockingDetachedWorktrees = detachedWorktrees.filter(
-        (worktree) => !worktree.state.safeToRemoveManually,
-    );
-
-    return blockingDetachedWorktrees.length === 0
         ? branches
-        : failClosedSafeDeleteBranches(
-              branches,
-              `detached worktree state required manual review during the final report proof recheck (${blockingDetachedWorktrees.length} blocking detached worktree(s)).`,
-          );
+        : failClosedSafeDeleteBranches(branches, finalProofIssue);
 }
 
 function readFinalDetachedWorktreeReports(
@@ -2582,7 +2590,7 @@ function parseRemoteHeadSha(remoteHeadOutput: string): null | string {
 }
 
 function readOriginUrl(repoRoot: string): string {
-    return readGit(repoRoot, ['remote', 'get-url', 'origin']);
+    return readGit(repoRoot, ['config', '--get', 'remote.origin.url']);
 }
 
 function readReachableHiddenRefAnalysis(
@@ -3661,7 +3669,6 @@ function protectedBaseBranchNeedsReview(report: BranchReport): boolean {
 
     return (
         protectedBranchStateNeedsReview(state) ||
-        repositoryStateNeedsReview(state) ||
         protectedBaseRemoteStateNeedsReview(report.remoteBranch)
     );
 }
@@ -3678,19 +3685,6 @@ function protectedBranchStateNeedsReview(state: BranchState): boolean {
         !state.branchReflogAvailable ||
         state.branchReflogUniqueCommitCount > 0 ||
         state.hasBlockingDetachedWorktree
-    );
-}
-
-function repositoryStateNeedsReview(state: BranchState): boolean {
-    return (
-        state.repositoryLinkedWorktreeCount > 0 ||
-        state.repositoryWorktreeDirtyCount > 0 ||
-        !state.repositoryHiddenRefsAvailable ||
-        state.repositoryHiddenRefCount > 0 ||
-        !state.repositoryReflogAvailable ||
-        state.repositoryReflogUniqueCommitCount > 0 ||
-        !state.repositoryUnreachableCommitsAvailable ||
-        state.repositoryUnreachableCommitCount > 0
     );
 }
 
@@ -4064,19 +4058,14 @@ function assessBranchWithoutOriginUpstream(
     const liveBranchProbe = readLiveOriginBranchProbe(repoRoot, branch);
     const liveSha =
         liveBranchProbe.kind === 'present' ? liveBranchProbe.sha : null;
-
-    if (localTrackingSha !== null || liveBranchProbe.kind !== 'absent') {
-        return {
-            branch,
-            liveSha,
-            localTrackingProofFingerprint: null,
-            localTrackingSha,
-            remote: 'origin',
-            remoteSafetyProofFingerprint: null,
-            shortName,
-            status: 'identity_unverified',
-        };
-    }
+    const status = readOriginRemoteBranchStatus(
+        repoRoot,
+        base,
+        branch,
+        shortName,
+        liveBranchProbe,
+        localTrackingSha,
+    );
 
     return {
         branch,
@@ -4086,7 +4075,7 @@ function assessBranchWithoutOriginUpstream(
         remote: 'origin',
         remoteSafetyProofFingerprint: null,
         shortName,
-        status: 'history_unverified',
+        status,
     };
 }
 
@@ -4245,20 +4234,13 @@ function readOriginRemoteBranchStatus(
     }
 
     if (liveBranchProbe.kind === 'absent') {
-        if (localTrackingSha !== null) {
-            const trackingStatus = readLocalTrackingRefStatus(
-                repoRoot,
-                base,
-                trackingShortName,
-                localTrackingSha,
-            );
-
-            if (trackingStatus !== 'safe') {
-                return trackingStatus;
-            }
-        }
-
-        return readAbsentRemoteBranchStatus(repoRoot, base, branch);
+        return readAbsentRemoteBranchStatus(
+            repoRoot,
+            base,
+            trackingShortName,
+            branch,
+            localTrackingSha,
+        );
     }
 
     return readPresentOriginRemoteBranchStatus(
@@ -4333,6 +4315,10 @@ function readPresentOriginRemoteBranchStatus(
         return liveTipStatus;
     }
 
+    if (!originGitDirectoryIsLocallyInspectable(repoRoot, base)) {
+        return 'safe';
+    }
+
     const trackingStatus = readLocalTrackingRefStatus(
         repoRoot,
         base,
@@ -4392,6 +4378,13 @@ function readPresentOriginLiveTipStatus(
     ])
         ? 'safe'
         : 'live_tip_not_on_base';
+}
+
+function originGitDirectoryIsLocallyInspectable(
+    repoRoot: string,
+    base: BaseRef,
+): boolean {
+    return resolveLocalGitRemotePath(repoRoot, base.remoteUrl) !== null;
 }
 
 function readLocalTrackingRefStatus(
@@ -4560,11 +4553,36 @@ function readOriginCheckedOutWorktreeStatus(
 function readAbsentRemoteBranchStatus(
     repoRoot: string,
     base: BaseRef,
+    trackingShortName: string,
     branch: string,
+    localTrackingSha: null | string,
 ): Extract<
     RemoteBranchStatus,
-    'absent' | 'history_not_on_base' | 'history_unverified'
+    | 'absent'
+    | 'history_not_on_base'
+    | 'history_unverified'
+    | 'tracking_ref_not_on_base'
 > {
+    if (
+        localTrackingSha !== null &&
+        !gitSucceeded(repoRoot, [
+            'merge-base',
+            '--is-ancestor',
+            localTrackingSha,
+            base.liveSha,
+        ])
+    ) {
+        return 'tracking_ref_not_on_base';
+    }
+
+    if (!originGitDirectoryIsLocallyInspectable(repoRoot, base)) {
+        return 'absent';
+    }
+
+    if (readTrackedRemoteSha(repoRoot, trackingShortName) === null) {
+        return 'absent';
+    }
+
     const inspection = readRemoteHistoryInspection(repoRoot, base);
 
     if (inspection.status !== 'ready') {
@@ -4983,30 +5001,18 @@ function buildBranchState(
     const safeToDelete = isBranchSafeToDelete(
         branch,
         branchReflogAnalysis,
-        hasBlockingDetachedWorktree,
-        hiddenRefAnalysis,
         linkedWorktreeFlags,
         mergedByHistory,
         linkedWorktrees.length,
-        repositoryLinkedWorktreePaths.length,
-        repositoryDirtyWorktrees.length,
         remoteBranch,
-        repositoryReflogAnalysis,
-        unreachableCommitAnalysis,
     );
     const safetyProofFingerprint = buildBranchSafetyProofFingerprint(
         branch,
         branchReflogAnalysis,
-        hasBlockingDetachedWorktree,
-        hiddenRefAnalysis,
         linkedWorktreeFlags,
         mergedByHistory,
         linkedWorktrees.length,
-        repositoryLinkedWorktreePaths.length,
-        repositoryDirtyWorktrees.length,
         remoteBranch,
-        repositoryReflogAnalysis,
-        unreachableCommitAnalysis,
     );
 
     return {
@@ -5048,23 +5054,12 @@ function buildBranchState(
 function buildBranchSafetyProofFingerprint(
     branch: string,
     branchReflogAnalysis: ReflogAnalysis,
-    hasBlockingDetachedWorktree: boolean,
-    hiddenRefAnalysis: HiddenRefAnalysis,
     linkedWorktreeFlags: ReturnType<typeof readLinkedWorktreeFlags>,
     mergedByHistory: boolean,
     linkedWorktreeCount: number,
-    repositoryLinkedWorktreeCount: number,
-    repositoryDirtyWorktreeCount: number,
     remoteBranch: null | RemoteBranchAssessment,
-    repositoryReflogAnalysis: ReflogAnalysis,
-    unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
 ): null | string {
-    if (
-        branchReflogAnalysis.fingerprint === null ||
-        hiddenRefAnalysis.fingerprint === null ||
-        repositoryReflogAnalysis.fingerprint === null ||
-        unreachableCommitAnalysis.fingerprint === null
-    ) {
+    if (branchReflogAnalysis.fingerprint === null) {
         return null;
     }
 
@@ -5072,17 +5067,10 @@ function buildBranchSafetyProofFingerprint(
         JSON.stringify({
             branch,
             branchReflogFingerprint: branchReflogAnalysis.fingerprint,
-            hasBlockingDetachedWorktree,
-            hiddenRefFingerprint: hiddenRefAnalysis.fingerprint,
             linkedWorktreeCount,
             linkedWorktreeFlags,
             mergedByHistory,
             remoteBranch,
-            repositoryDirtyWorktreeCount,
-            repositoryLinkedWorktreeCount,
-            repositoryReflogFingerprint: repositoryReflogAnalysis.fingerprint,
-            repositoryUnreachableFingerprint:
-                unreachableCommitAnalysis.fingerprint,
         }),
     );
 }
@@ -5170,37 +5158,16 @@ function readWorktreesSafely(repoPath: string): null | WorktreeInfo[] {
 function isBranchSafeToDelete(
     branch: string,
     branchReflogAnalysis: ReflogAnalysis,
-    hasBlockingDetachedWorktree: boolean,
-    hiddenRefAnalysis: HiddenRefAnalysis,
     linkedWorktreeFlags: ReturnType<typeof readLinkedWorktreeFlags>,
     mergedByHistory: boolean,
     linkedWorktreeCount: number,
-    repositoryLinkedWorktreeCount: number,
-    repositoryDirtyWorktreeCount: number,
     remoteBranch: null | RemoteBranchAssessment,
-    repositoryReflogAnalysis: ReflogAnalysis,
-    unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
 ): boolean {
     return (
         mergedByHistory &&
         branchHasNoUniqueReflogCommits(branchReflogAnalysis) &&
-        !hasBlockingDetachedWorktree &&
-        repositoryLinkedWorktreeCount === 0 &&
-        repositoryDirtyWorktreeCount === 0 &&
-        repositoryHasNoReachableHiddenRefs(hiddenRefAnalysis) &&
-        repositoryHasNoUniqueReflogCommits(repositoryReflogAnalysis) &&
-        repositoryHasNoUnreachableCommits(unreachableCommitAnalysis) &&
         isRemoteBranchSafeToDelete(branch, remoteBranch) &&
         hasNoBlockingLinkedWorktrees(linkedWorktreeCount, linkedWorktreeFlags)
-    );
-}
-
-function repositoryHasNoUniqueReflogCommits(
-    repositoryReflogAnalysis: ReflogAnalysis,
-): boolean {
-    return (
-        repositoryReflogAnalysis.available &&
-        repositoryReflogAnalysis.uniqueCommitCount === 0
     );
 }
 
@@ -5211,21 +5178,6 @@ function branchHasNoUniqueReflogCommits(
         branchReflogAnalysis.available &&
         branchReflogAnalysis.uniqueCommitCount === 0
     );
-}
-
-function repositoryHasNoUnreachableCommits(
-    unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
-): boolean {
-    return (
-        unreachableCommitAnalysis.available &&
-        unreachableCommitAnalysis.commitCount === 0
-    );
-}
-
-function repositoryHasNoReachableHiddenRefs(
-    hiddenRefAnalysis: HiddenRefAnalysis,
-): boolean {
-    return hiddenRefAnalysis.available && hiddenRefAnalysis.refs.length === 0;
 }
 
 function hasNoBlockingLinkedWorktrees(
@@ -5258,11 +5210,7 @@ function isAbsentRemoteBranchSafe(
     branch: string,
     remoteBranch: RemoteBranchAssessment,
 ): boolean {
-    return (
-        remoteBranch.remote === 'origin' &&
-        remoteBranch.branch === branch &&
-        remoteBranch.remoteSafetyProofFingerprint !== null
-    );
+    return remoteBranch.remote === 'origin' && remoteBranch.branch === branch;
 }
 
 function isLiveRemoteBranchSafe(
@@ -5274,8 +5222,6 @@ function isLiveRemoteBranchSafe(
         remoteBranch.remote === 'origin' &&
         remoteBranch.branch === branch &&
         remoteBranch.liveSha !== null &&
-        remoteBranch.localTrackingProofFingerprint !== null &&
-        remoteBranch.remoteSafetyProofFingerprint !== null &&
         remoteBranch.localTrackingSha === remoteBranch.liveSha
     );
 }
@@ -5422,12 +5368,6 @@ function isKeptOnlyByProofGaps(state: BranchState): boolean {
         state.branchTipOnBase &&
         state.branchReflogAvailable &&
         state.branchReflogUniqueCommitCount === 0 &&
-        state.repositoryHiddenRefsAvailable &&
-        state.repositoryHiddenRefCount === 0 &&
-        state.repositoryReflogAvailable &&
-        state.repositoryReflogUniqueCommitCount === 0 &&
-        state.repositoryUnreachableCommitsAvailable &&
-        state.repositoryUnreachableCommitCount === 0 &&
         !state.safeToDelete
     );
 }
@@ -5460,15 +5400,6 @@ function collectBranchReasonCodes(
         ...(state.hasBlockingDetachedWorktree
             ? (['detached_worktree_requires_manual_review'] as const)
             : []),
-        ...(state.repositoryWorktreeDirtyCount > 0
-            ? (['repository_worktree_dirty'] as const)
-            : []),
-        ...(state.repositoryLinkedWorktreeCount > 0
-            ? (['repository_linked_worktrees_present'] as const)
-            : []),
-        ...readRepositoryHiddenRefReasonCodes(state),
-        ...readRepositoryReflogReasonCodes(state),
-        ...readRepositoryUnreachableCommitReasonCodes(state),
         ...readOriginBranchReasonCodes(
             branch,
             remoteBranch,
@@ -5485,48 +5416,6 @@ function readBranchReflogReasonCodes(state: BranchState): BranchReasonCode[] {
             : (['branch_reflog_unavailable'] as const)),
         ...(state.branchReflogUniqueCommitCount > 0
             ? (['branch_reflog_has_unique_commits'] as const)
-            : []),
-    ];
-}
-
-function readRepositoryUnreachableCommitReasonCodes(
-    state: BranchState,
-): BranchReasonCode[] {
-    return [
-        ...(!state.repositoryUnreachableCommitsAvailable
-            ? (['repository_unreachable_commits_unavailable'] as const)
-            : []),
-        ...(state.repositoryUnreachableCommitCount > 0
-            ? (['repository_unreachable_commits_present'] as const)
-            : []),
-        ...(state.repositoryWorktreeDirtyCount > 0
-            ? (['repository_worktree_dirty'] as const)
-            : []),
-    ];
-}
-
-function readRepositoryReflogReasonCodes(
-    state: BranchState,
-): BranchReasonCode[] {
-    return [
-        ...(!state.repositoryReflogAvailable
-            ? (['repository_reflog_unavailable'] as const)
-            : []),
-        ...(state.repositoryReflogUniqueCommitCount > 0
-            ? (['repository_reflog_has_unique_commits'] as const)
-            : []),
-    ];
-}
-
-function readRepositoryHiddenRefReasonCodes(
-    state: BranchState,
-): BranchReasonCode[] {
-    return [
-        ...(!state.repositoryHiddenRefsAvailable
-            ? (['repository_hidden_refs_unavailable'] as const)
-            : []),
-        ...(state.repositoryHiddenRefCount > 0
-            ? (['repository_hidden_refs_present'] as const)
             : []),
     ];
 }
@@ -5612,11 +5501,6 @@ function buildBranchReasonDetails(
         ...readBranchTipReasonDetails(baseShort, state),
         ...buildBranchReflogReasonDetails(baseShort, state),
         ...buildDetachedWorktreeBlockingReasonDetails(detachedWorktrees),
-        ...buildRepositoryWorktreeReasonDetails(state),
-        ...buildRepositoryLinkedWorktreeReasonDetails(state),
-        ...buildRepositoryHiddenRefReasonDetails(state),
-        ...buildRepositoryReflogReasonDetails(baseShort, state),
-        ...buildRepositoryUnreachableCommitReasonDetails(state),
         ...buildRemoteReasonDetails(
             branch,
             baseShort,
@@ -5687,105 +5571,6 @@ function buildBranchReflogReasonDetails(
     ];
 }
 
-function buildRepositoryWorktreeReasonDetails(state: BranchState): string[] {
-    if (state.repositoryWorktreeDirtyCount === 0) {
-        return [];
-    }
-
-    return [
-        `the repository has ${state.repositoryWorktreeDirtyCount} dirty, missing, or prunable worktree(s), so automatic cleanup fails closed.`,
-        ...state.repositoryWorktreeDirtyPaths.map(
-            (worktreePath) =>
-                `worktree ${worktreePath} has local state that requires manual review.`,
-        ),
-    ];
-}
-
-function buildRepositoryLinkedWorktreeReasonDetails(
-    state: BranchState,
-): string[] {
-    if (state.repositoryLinkedWorktreeCount === 0) {
-        return [];
-    }
-
-    const visiblePaths = state.repositoryLinkedWorktreePaths
-        .slice(0, 5)
-        .join(', ');
-    const suffix =
-        state.repositoryLinkedWorktreeCount > 5
-            ? ` and ${state.repositoryLinkedWorktreeCount - 5} more`
-            : '';
-
-    return [
-        `the repository has ${state.repositoryLinkedWorktreeCount} linked worktree(s), so automatic branch cleanup fails closed: ${visiblePaths}${suffix}.`,
-    ];
-}
-
-function buildRepositoryUnreachableCommitReasonDetails(
-    state: BranchState,
-): string[] {
-    if (!state.repositoryUnreachableCommitsAvailable) {
-        return [
-            'the repository-wide unreachable-commit scan could not complete, so expired reflog-only local history could not be ruled out automatically.',
-        ];
-    }
-
-    if (state.repositoryUnreachableCommitCount > 0) {
-        return [
-            `the repository still contains ${state.repositoryUnreachableCommitCount} unreachable object(s), so automatic cleanup fails closed until they are reviewed or pruned.`,
-        ];
-    }
-
-    return [
-        'the repository does not contain unreachable objects outside the current ref graph.',
-    ];
-}
-
-function buildRepositoryReflogReasonDetails(
-    baseShort: string,
-    state: BranchState,
-): string[] {
-    if (!state.repositoryReflogAvailable) {
-        return [
-            'the repository-wide reflog scan could not complete, so retained reflog-only history outside the canonical base could not be ruled out automatically.',
-        ];
-    }
-
-    if (state.repositoryReflogUniqueCommitCount > 0) {
-        return [
-            `the repository-wide reflog graph still references ${state.repositoryReflogUniqueCommitCount} commit(s) that are not reachable from ${baseShort}.`,
-        ];
-    }
-
-    return [
-        `the repository-wide reflog graph does not reference any commits that are still outside ${baseShort}.`,
-    ];
-}
-
-function buildRepositoryHiddenRefReasonDetails(state: BranchState): string[] {
-    if (!state.repositoryHiddenRefsAvailable) {
-        return [
-            'the repository-wide ref scan could not complete, so reachable refs outside the canonical base could not be ruled out automatically.',
-        ];
-    }
-
-    if (state.repositoryHiddenRefCount > 0) {
-        const visibleRefs = state.repositoryHiddenRefs.slice(0, 5).join(', ');
-        const suffix =
-            state.repositoryHiddenRefCount > 5
-                ? ` and ${state.repositoryHiddenRefCount - 5} more`
-                : '';
-
-        return [
-            `the repository still has ${state.repositoryHiddenRefCount} reachable ref(s) outside the canonical base: ${visibleRefs}${suffix}.`,
-        ];
-    }
-
-    return [
-        'the repository does not contain reachable refs outside the canonical base.',
-    ];
-}
-
 function buildRemoteReasonDetails(
     branch: string,
     baseShort: string,
@@ -5833,7 +5618,7 @@ function readRemoteReasonDetail(
         live_tip_unverified: `the live origin branch ${remoteName} could not be verified against the local remote-tracking ref. Fetch origin before manual remote cleanup.`,
         non_origin_upstream: `the branch tracks ${remoteName}, but only origin’s default branch is treated as canonical history.`,
         protected_base: `the tracked origin branch ${remoteName} is the canonical default branch and is protected from deletion.`,
-        safe: `the live origin branch ${remoteName} matches the local tracking ref, is already reachable from ${baseShort}, and can be auto-archived out of the active branch namespace while preserving its reflog.`,
+        safe: `the live origin branch ${remoteName} matches the local tracking ref and is already reachable from ${baseShort}.`,
         tracking_ref_not_on_base: `the live origin branch ${remoteName} is gone, but the remaining local origin-tracking ref is still not reachable from ${baseShort}.`,
     };
 
@@ -6627,6 +6412,7 @@ function buildApplyResultFromFinalState(
     const remoteBackupRef = readReportedRemoteBackupRef(remoteBranch);
     const localBranchStillAbsent = !branchRefExists(repoRoot, branchName);
     const remoteBranchStillAbsent = remoteDeleteTargetStillAbsent(
+        repoRoot,
         branch,
         remoteBranch,
     );
@@ -6642,14 +6428,10 @@ function buildApplyResultFromFinalState(
             localBranch.skippedReason,
         ) && finalProofValid;
     const remoteBranchDeleted =
-        branchDeleteSucceededCleanly(
-            remoteBranch.deleted,
-            remoteBranch.archivedSha ?? null,
-            remoteBranch.backupRef,
+        remoteBranchDeleteSucceededCleanly(
+            remoteBranch,
             remoteBackupRef,
             remoteBranchStillAbsent,
-            remoteBranch.errors,
-            remoteBranch.skippedReason,
         ) &&
         finalProofValid &&
         localBranchStillAbsent;
@@ -6738,22 +6520,55 @@ function readFinalReportedRemoteArchiveIssue(
         return null;
     }
 
-    if (
-        remoteBranch.backupRepoPath === undefined ||
-        remoteBranch.backupRepoPath === null ||
-        remoteBranch.backupRef === null ||
-        branch.remoteBranch === null
-    ) {
+    return remoteDeleteResultIsHostedDelete(remoteBranch)
+        ? readFinalHostedRemoteDeletionIssue(repoRoot, base, branch)
+        : readFinalArchivedRemoteBranchIssue(
+              repoRoot,
+              base,
+              branch,
+              remoteBranch,
+          );
+}
+
+function readFinalHostedRemoteDeletionIssue(
+    repoRoot: string,
+    base: BaseRef,
+    branch: BranchReport,
+): null | string {
+    if (branch.remoteBranch === null) {
+        return 'final hosted remote deletion revalidation failed: the original remote branch could not be identified.';
+    }
+
+    const issue = readHostedRemoteDeleteFinalIssue(
+        repoRoot,
+        base,
+        branch.remoteBranch,
+    );
+
+    return issue === null
+        ? null
+        : `final hosted remote deletion revalidation failed: ${issue}`;
+}
+
+function readFinalArchivedRemoteBranchIssue(
+    repoRoot: string,
+    base: BaseRef,
+    branch: BranchReport,
+    remoteBranch: RemoteDeleteResult,
+): null | string {
+    const recordedArchive = readRecordedRemoteArchive(remoteBranch);
+
+    if (recordedArchive === null || branch.remoteBranch === null) {
         return 'final remote archive proof revalidation failed: the remote branch archive was not fully recorded.';
     }
 
-    const archiveBranchName = remoteBranch.backupRef.replace(
+    const archiveBranchName = recordedArchive.backupRef.replace(
         /^refs\/heads\//u,
         '',
     );
     const issue = readFinalRemoteArchiveIssue(
         repoRoot,
-        remoteBranch.backupRepoPath,
+        recordedArchive.backupRepoPath,
         base,
         branch.remoteBranch,
         archiveBranchName,
@@ -6815,17 +6630,65 @@ function readFinalApplyProofIssue(
 }
 
 function remoteDeleteTargetStillAbsent(
+    repoRoot: string,
     branch: BranchReport,
     remoteBranch: RemoteDeleteResult,
 ): boolean {
     const remoteRepoPath = remoteBranch.backupRepoPath;
     const remoteBranchName = branch.remoteBranch?.branch;
 
+    if (
+        remoteDeleteResultIsHostedDelete(remoteBranch) &&
+        remoteBranchName !== undefined
+    ) {
+        return (
+            readLiveOriginBranchProbe(repoRoot, remoteBranchName).kind ===
+            'absent'
+        );
+    }
+
     return (
         remoteRepoPath !== undefined &&
         remoteRepoPath !== null &&
         remoteBranchName !== undefined &&
         !branchRefExists(remoteRepoPath, remoteBranchName)
+    );
+}
+
+function remoteBranchDeleteSucceededCleanly(
+    remoteBranch: RemoteDeleteResult,
+    reportedBackupRef: null | string,
+    branchStillAbsent: boolean,
+): boolean {
+    if (remoteDeleteResultIsHostedDelete(remoteBranch)) {
+        return (
+            branchStillAbsent &&
+            remoteBranch.errors.length === 0 &&
+            remoteBranch.skippedReason === null
+        );
+    }
+
+    return branchDeleteSucceededCleanly(
+        remoteBranch.deleted,
+        remoteBranch.archivedSha ?? null,
+        remoteBranch.backupRef,
+        reportedBackupRef,
+        branchStillAbsent,
+        remoteBranch.errors,
+        remoteBranch.skippedReason,
+    );
+}
+
+function remoteDeleteResultIsHostedDelete(
+    remoteBranch: RemoteDeleteResult,
+): boolean {
+    return (
+        remoteBranch.deleted &&
+        remoteBranch.archivedSha !== undefined &&
+        remoteBranch.archivedSha !== null &&
+        remoteBranch.backupRef === null &&
+        (remoteBranch.backupRepoPath === undefined ||
+            remoteBranch.backupRepoPath === null)
     );
 }
 
@@ -6983,10 +6846,34 @@ function restoreRemoteBranchFromResult(
 function readRemoteArchiveResultIssue(
     remoteBranch: RemoteDeleteResult,
 ): null | string {
-    if (!remoteBranch.deleted) {
+    if (
+        !remoteBranch.deleted ||
+        remoteDeleteResultIsHostedDelete(remoteBranch)
+    ) {
         return null;
     }
 
+    const recordedArchive = readRecordedRemoteArchive(remoteBranch);
+
+    if (recordedArchive === null) {
+        return 'the remote branch archive was not fully recorded.';
+    }
+
+    const validatedRemoteBackupRef = readValidatedBranchBackupRef(
+        recordedArchive.backupRepoPath,
+        recordedArchive.backupRef,
+        recordedArchive.archivedSha,
+        recordedArchive.backupReflogPrefix,
+    );
+
+    return validatedRemoteBackupRef === null
+        ? 'the remote branch archive ref could not be revalidated.'
+        : null;
+}
+
+function readRecordedRemoteArchive(
+    remoteBranch: RemoteDeleteResult,
+): null | RecordedRemoteArchive {
     if (
         remoteBranch.backupRepoPath === undefined ||
         remoteBranch.backupRepoPath === null ||
@@ -6996,19 +6883,15 @@ function readRemoteArchiveResultIssue(
         remoteBranch.backupReflogPrefix === undefined ||
         remoteBranch.backupReflogPrefix === null
     ) {
-        return 'the remote branch archive was not fully recorded.';
+        return null;
     }
 
-    const validatedRemoteBackupRef = readValidatedBranchBackupRef(
-        remoteBranch.backupRepoPath,
-        remoteBranch.backupRef,
-        remoteBranch.archivedSha,
-        remoteBranch.backupReflogPrefix,
-    );
-
-    return validatedRemoteBackupRef === null
-        ? 'the remote branch archive ref could not be revalidated.'
-        : null;
+    return {
+        archivedSha: remoteBranch.archivedSha,
+        backupRef: remoteBranch.backupRef,
+        backupReflogPrefix: remoteBranch.backupReflogPrefix,
+        backupRepoPath: remoteBranch.backupRepoPath,
+    };
 }
 
 function buildApplyExceptionResult(
@@ -8802,9 +8685,7 @@ function readPostArchiveRepositorySafetyIssue(
     try {
         const baseIssue = readLiveBaseValidationIssue(repoPath, base);
 
-        return (
-            baseIssue ?? readRepositoryWideSafetyIssue(repoPath, base.liveSha)
-        );
+        return baseIssue ?? readHistoryRewriteOverlayIssue(repoPath);
     } catch (error) {
         return readUnknownErrorMessage(error);
     }
@@ -9529,6 +9410,16 @@ function deleteRemoteBranch(
         return buildRemoteDeleteSkippedResult(localArchiveIssue);
     }
 
+    const hostedRemoteDelete = deleteHostedRemoteBranchIfEligible(
+        repoRoot,
+        base,
+        branch,
+    );
+
+    if (hostedRemoteDelete !== null) {
+        return hostedRemoteDelete;
+    }
+
     const remoteArchivePreparation = prepareRemoteArchive(
         repoRoot,
         base,
@@ -9544,6 +9435,219 @@ function deleteRemoteBranch(
               remoteArchivePreparation.latestBase,
               remoteArchivePreparation.remoteBranch,
               remoteArchivePreparation.liveSha,
+          );
+}
+
+function deleteHostedRemoteBranchIfEligible(
+    repoRoot: string,
+    base: BaseRef,
+    branch: BranchReport,
+): null | RemoteDeleteResult {
+    const remoteBranch = branch.remoteBranch;
+
+    if (
+        remoteBranch === null ||
+        originGitDirectoryIsLocallyInspectable(repoRoot, base)
+    ) {
+        return null;
+    }
+
+    if (remoteBranch.status === 'absent') {
+        return buildRemoteDeleteSkippedResult(
+            `the live origin branch ${remoteBranch.shortName} is already absent; no remote deletion was needed.`,
+            null,
+            true,
+        );
+    }
+
+    if (!isRemoteBranchSafeToDelete(branch.name, remoteBranch)) {
+        return buildRemoteDeleteSkippedResult(
+            'the origin branch does not pass the automatic hosted remote-deletion safety checks.',
+        );
+    }
+
+    return deleteHostedRemoteBranch(repoRoot, base, remoteBranch);
+}
+
+function deleteHostedRemoteBranch(
+    repoRoot: string,
+    base: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+): RemoteDeleteResult {
+    const latestBaseValidation = readHostedRemoteDeleteBaseValidation(
+        repoRoot,
+        base,
+    );
+
+    if (latestBaseValidation.status === 'blocked') {
+        return latestBaseValidation.result;
+    }
+
+    const validation = readHostedRemoteDeleteValidation(
+        repoRoot,
+        latestBaseValidation.base,
+        remoteBranch,
+    );
+
+    return validation.status === 'blocked'
+        ? validation.result
+        : pushHostedRemoteBranchDelete(
+              repoRoot,
+              latestBaseValidation.base,
+              remoteBranch,
+              validation.liveSha,
+          );
+}
+
+function readHostedRemoteDeleteBaseValidation(
+    repoRoot: string,
+    base: BaseRef,
+): HostedRemoteDeleteBaseValidation {
+    try {
+        return {
+            base: detectBaseRef(repoRoot, base.ref, base.remoteUrl, base),
+            status: 'ready',
+        };
+    } catch (error) {
+        return {
+            result: buildRemoteDeleteSkippedResult(
+                `origin could not be revalidated before hosted remote deletion: ${readUnknownErrorMessage(error)}`,
+            ),
+            status: 'blocked',
+        };
+    }
+}
+
+function readHostedRemoteDeleteValidation(
+    repoRoot: string,
+    latestBase: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+): HostedRemoteDeleteValidation {
+    const liveBranchState = readRemoteArchiveLiveBranchState(
+        repoRoot,
+        latestBase.shortName,
+        remoteBranch,
+    );
+
+    if (liveBranchState.status !== 'ready') {
+        return liveBranchState;
+    }
+
+    if (liveBranchState.liveSha !== remoteBranch.liveSha) {
+        return {
+            result: buildRemoteDeleteSkippedResult(
+                `the live origin branch ${remoteBranch.shortName} moved from ${remoteBranch.liveSha?.slice(0, 7) ?? 'unknown'} to ${liveBranchState.liveSha.slice(0, 7)} before deletion.`,
+            ),
+            status: 'blocked',
+        };
+    }
+
+    const latestLocalTrackingSha = readTrackedRemoteSha(
+        repoRoot,
+        remoteBranch.shortName,
+    );
+    const latestRemoteStatus = readOriginRemoteBranchStatus(
+        repoRoot,
+        latestBase,
+        remoteBranch.branch,
+        remoteBranch.shortName,
+        liveBranchState.liveBranchProbe,
+        latestLocalTrackingSha,
+    );
+
+    if (latestRemoteStatus !== 'safe') {
+        return {
+            result: buildRemoteDeleteSkippedResult(
+                readRemoteDeleteSkippedReason(
+                    latestBase.shortName,
+                    remoteBranch.shortName,
+                    latestRemoteStatus,
+                ),
+            ),
+            status: 'blocked',
+        };
+    }
+
+    return liveBranchState;
+}
+
+function pushHostedRemoteBranchDelete(
+    repoRoot: string,
+    latestBase: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+    liveSha: string,
+): RemoteDeleteResult {
+    const deleteResult = tryGit(repoRoot, [
+        'push',
+        'origin',
+        `--force-with-lease=refs/heads/${remoteBranch.branch}:${liveSha}`,
+        `:refs/heads/${remoteBranch.branch}`,
+    ]);
+
+    if (!deleteResult.ok) {
+        return {
+            backupRef: null,
+            deleted: false,
+            errors: [
+                `remote branch ${remoteBranch.shortName}: ${deleteResult.error}`,
+            ],
+            skippedReason: null,
+        };
+    }
+
+    const finalIssue = readHostedRemoteDeleteFinalIssue(
+        repoRoot,
+        latestBase,
+        remoteBranch,
+    );
+
+    return finalIssue === null
+        ? {
+              archivedSha: liveSha,
+              backupRef: null,
+              backupRepoPath: null,
+              deleted: true,
+              errors: [],
+              skippedReason: null,
+          }
+        : {
+              archivedSha: null,
+              backupRef: null,
+              backupRepoPath: null,
+              deleted: false,
+              errors: [
+                  `remote branch ${remoteBranch.shortName}: ${finalIssue}`,
+              ],
+              skippedReason: null,
+          };
+}
+
+function readHostedRemoteDeleteFinalIssue(
+    repoRoot: string,
+    latestBase: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+): null | string {
+    const headIssue = readRemoteArchiveHeadSkippedReason(repoRoot, latestBase);
+
+    if (headIssue !== null) {
+        return headIssue;
+    }
+
+    const liveBranchProbe = readLiveOriginBranchProbe(
+        repoRoot,
+        remoteBranch.branch,
+    );
+
+    if (liveBranchProbe.kind === 'absent') {
+        return null;
+    }
+
+    return liveBranchProbe.kind === 'present'
+        ? `the live origin branch ${remoteBranch.shortName} still exists after delete.`
+        : readRemoteDeleteSkippedReason(
+              latestBase.shortName,
+              remoteBranch.shortName,
+              'live_probe_unverified',
           );
 }
 
@@ -10604,7 +10708,107 @@ function renderReport(report: GitCleanupReport): string {
         ...renderReportSection('## Skipped', skippedSections),
         ...renderReportSection('## Detached Worktrees', detachedSections),
         ...renderArchivePruneSection(report),
+        ...renderActionSummarySection(report),
     ].join('\n');
+}
+
+function renderActionSummarySection(report: GitCleanupReport): string[] {
+    return renderReportSection('## Action Summary', [
+        renderActionSummary(report),
+    ]);
+}
+
+function renderActionSummary(report: GitCleanupReport): string {
+    return [
+        ...renderApplyResultsActionSummary(report.applyResults),
+        ...renderArchivePruneActionSummary(report.archivePruneResults),
+        renderSafeDeleteActionSummary(report.branches.safeDelete),
+        ...renderApplyCommandActionSummary(report.branches.safeDelete),
+        renderNeedsReviewActionSummary(report.branches.needsReview),
+        renderDetachedWorktreeActionSummary(report.detachedWorktrees),
+    ].join('\n');
+}
+
+function renderApplyResultsActionSummary(
+    applyResults: readonly ApplyResult[] | undefined,
+): string[] {
+    if (applyResults === undefined) {
+        return [];
+    }
+
+    if (applyResults.length === 0) {
+        return ['- Applied deletes: none.'];
+    }
+
+    return [
+        `- Applied deletes: ${applyResults.map(renderApplyResultActionSummary).join('; ')}.`,
+    ];
+}
+
+function renderApplyResultActionSummary(applyResult: ApplyResult): string {
+    const localStatus = applyResult.localBranchDeleted
+        ? 'local deleted'
+        : 'local kept';
+    const remoteStatus = applyResult.remoteBranchDeleted
+        ? 'origin deleted'
+        : 'origin kept';
+    const errorStatus =
+        applyResult.errors.length === 0
+            ? ''
+            : `, ${applyResult.errors.length} error(s)`;
+
+    return `\`${applyResult.branch}\` (${localStatus}, ${remoteStatus}${errorStatus})`;
+}
+
+function renderArchivePruneActionSummary(
+    archivePruneResults: readonly ArchivePruneResult[] | undefined,
+): string[] {
+    if (archivePruneResults === undefined) {
+        return [];
+    }
+
+    const prunedCount = archivePruneResults.filter(
+        (result) => result.pruned,
+    ).length;
+    const keptCount = archivePruneResults.length - prunedCount;
+
+    return [`- Archive pruning: ${prunedCount} pruned, ${keptCount} kept.`];
+}
+
+function renderSafeDeleteActionSummary(
+    safeDeleteBranches: readonly BranchReport[],
+): string {
+    return `- Delete candidates: ${renderBranchNameList(safeDeleteBranches)}.`;
+}
+
+function renderApplyCommandActionSummary(
+    safeDeleteBranches: readonly BranchReport[],
+): string[] {
+    return safeDeleteBranches.length === 0
+        ? []
+        : ['- To delete them: `slop-refinery git-cleanup --apply`.'];
+}
+
+function renderNeedsReviewActionSummary(
+    needsReviewBranches: readonly BranchReport[],
+): string {
+    return `- Manual review: ${renderBranchNameList(needsReviewBranches)}.`;
+}
+
+function renderBranchNameList(branches: readonly { name: string }[]): string {
+    return branches.length === 0
+        ? 'none'
+        : branches.map((branch) => `\`${branch.name}\``).join(', ');
+}
+
+function renderDetachedWorktreeActionSummary(
+    detachedWorktrees: readonly DetachedWorktreeReport[],
+): string {
+    const count = detachedWorktrees.length;
+
+    return count === 0
+        ? '- Detached worktrees: none.'
+        : `- Detached worktrees needing review: ${count}.`;
 }
 
 function renderArchivePruneSummary(report: GitCleanupReport): string[] {

@@ -28,6 +28,7 @@
     ],
     "scripts": {
         "format": "prettier --write . && eslint --fix --config eslint.format.config.ts .",
+        "git-cleanup": "tsx ./src/cli/bin.ts git-cleanup",
         "lint": "eslint .",
         "ruleset:pull": "tsx ./src/cli/bin.ts ruleset pull",
         "ruleset:push": "tsx ./src/cli/bin.ts ruleset push",

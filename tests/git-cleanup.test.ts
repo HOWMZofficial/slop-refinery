@@ -173,6 +173,21 @@ function configureFixtureClone(repoClonePath: string): void {
     configureFixtureHistoryRetention(repoClonePath);
 }
 
+function makeOriginAppearHosted(fixture: GitFixture): string {
+    const hostedOriginUrl = `ssh://git@example.test/${path.basename(
+        fixture.tempPath,
+    )}/origin.git`;
+
+    git(fixture.repoPath, ['remote', 'set-url', 'origin', hostedOriginUrl]);
+    git(
+        fixture.repoPath,
+        ['config', `url.${fixture.originPath}.insteadOf`, hostedOriginUrl],
+        false,
+    );
+
+    return hostedOriginUrl;
+}
+
 function configureFixtureHistoryRetention(cwd: string): void {
     git(cwd, ['config', 'core.logAllRefUpdates', 'always'], false);
     git(cwd, ['config', 'gc.reflogExpire', 'never'], false);
@@ -241,6 +256,18 @@ function createMergedFeatureBranch(
     git(cwd, ['checkout', 'main'], false);
     git(cwd, ['merge', '--ff-only', branchName], false);
     git(cwd, ['push', 'origin', 'main'], false);
+}
+
+function createUnmergedRemoteBranch(cwd: string, branchName: string): void {
+    git(cwd, ['checkout', '-b', branchName], false);
+    commitFile(
+        cwd,
+        `${branchName}.txt`,
+        `${branchName}\n`,
+        `Add ${branchName} work`,
+    );
+    git(cwd, ['push', '-u', 'origin', branchName], false);
+    git(cwd, ['checkout', 'main'], false);
 }
 
 function createHiddenLocalRefNotOnBase(cwd: string, refName: string): void {
@@ -598,6 +625,23 @@ function ensurePresent<T>(value: null | T, message: string): T {
     throw new Error(message);
 }
 
+function expectRemoteArchiveTransactionFailedWithoutArchive(
+    fixture: GitFixture,
+    archiveResult: ReturnType<typeof archiveBranchRefTransactionForTesting>,
+    featureSha: string,
+    archiveBranchName: string,
+): void {
+    expect(archiveResult.ok).toBe(false);
+    expect(readCurrentSha(fixture.originPath, 'feature')).toBe(featureSha);
+    expect(
+        git(fixture.originPath, [
+            'for-each-ref',
+            `refs/heads/${archiveBranchName}`,
+            '--format=%(refname:short)',
+        ]),
+    ).toBe('');
+}
+
 function expectFeatureDeletedLocallyAndRemotely(
     fixture: GitFixture,
     applyResult:
@@ -632,6 +676,35 @@ function expectFeatureDeletedLocallyAndRemotely(
     expect(applyResult?.remoteBackupRef).toBe(
         `refs/heads/${remoteArchiveBranch}`,
     );
+}
+
+function expectHostedFeatureDeletedLocallyAndRemotely(
+    fixture: GitFixture,
+    applyResult:
+        | NonNullable<GitCleanupReportType['applyResults']>[number]
+        | undefined,
+    remoteFeatureSha: string,
+): void {
+    const localArchiveBranch = ensurePresent(
+        findArchivedBranch(fixture.repoPath, 'local', 'feature'),
+        'Expected a local archived branch for feature.',
+    );
+
+    expect(applyResult?.localBranchDeleted).toBe(true);
+    expect(applyResult?.remoteBranchDeleted).toBe(true);
+    expect(applyResult?.remoteBranchSkippedReason).toBeNull();
+    expect(applyResult?.remoteBackupRef).toBeNull();
+    expect(git(fixture.repoPath, ['branch', '--list', 'feature'])).toBe('');
+    expect(
+        git(fixture.repoPath, ['ls-remote', 'origin', 'refs/heads/feature']),
+    ).toBe('');
+    expect(readCurrentSha(fixture.repoPath, localArchiveBranch)).toBe(
+        remoteFeatureSha,
+    );
+    expect(
+        findArchivedBranch(fixture.originPath, 'remote', 'feature'),
+    ).toBeNull();
+    expectArchivedBranchReflogExists(fixture.repoPath, localArchiveBranch);
 }
 
 function applyFeatureAndReadArchiveRefs(
@@ -791,6 +864,21 @@ function expectSafeDeleteCommandsUseGuardedApply(
     );
 }
 
+function expectSafeDeleteBranch(
+    report: GitCleanupReportType,
+    branchName = 'feature',
+): GitCleanupBranchReport {
+    const safeDeleteBranch = findBranchReport(report, 'safeDelete', branchName);
+
+    expect(safeDeleteBranch?.classification).toBe('safe_delete');
+
+    if (safeDeleteBranch === undefined) {
+        throw new Error(`Expected ${branchName} to be safe_delete.`);
+    }
+
+    return safeDeleteBranch;
+}
+
 function buildGitCleanupStressScenario(seed: number): GitCleanupStressScenario {
     const localModes: readonly GitCleanupStressLocalMode[] = [
         'clean',
@@ -912,8 +1000,9 @@ function expectGitCleanupStressInvariant(
         'needsReview',
         'feature',
     );
-    const expectedSafe =
-        scenario.localMode === 'clean' && scenario.remoteMode === 'clean';
+    const expectedSafe = ['absent_no_upstream', 'clean'].includes(
+        scenario.remoteMode,
+    );
 
     if (expectedSafe) {
         expect(safeDeleteBranch?.classification).toBe('safe_delete');
@@ -1649,23 +1738,6 @@ function installDirtyWorktreeAndGraftOnLocalArchiveHook(
     chmodSync(hookPath, 0o755);
 }
 
-function createDirtyLocalArchiveRestoreFixture(): {
-    featureSha: string;
-    fixture: GitFixture;
-} {
-    const fixture = createGitFixture();
-
-    createMergedFeatureBranch(fixture.repoPath, 'feature', {
-        pushRemote: true,
-    });
-    installDirtyWorktreeOnLocalArchiveHook(fixture);
-
-    return {
-        featureSha: readCurrentSha(fixture.repoPath, 'feature'),
-        fixture,
-    };
-}
-
 function expectLocalArchiveRestorePreservedBackup(
     fixture: GitFixture,
     featureSha: string,
@@ -2389,6 +2461,34 @@ const gitCleanupIntegrationTimeoutMs = 60_000;
 const gitCleanupLongIntegrationTimeoutMs = 180_000;
 
 describe('git-cleanup CLI', () => {
+    describe('human-readable output', () => {
+        it(
+            'ends human-readable audit output with a compact action summary',
+            () => {
+                const fixture = createGitFixture();
+
+                createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                    pushRemote: true,
+                });
+                createUnmergedRemoteBranch(fixture.repoPath, 'review');
+                makeOriginAppearHosted(fixture);
+
+                const result = runGitCleanup(fixture.repoPath, ['git-cleanup']);
+                const expectedEnding = [
+                    '## Action Summary',
+                    '- Delete candidates: `feature`.',
+                    '- To delete them: `slop-refinery git-cleanup --apply`.',
+                    '- Manual review: `review`.',
+                    '- Detached worktrees: none.',
+                ].join('\n');
+
+                expect(result.status).toBe(0);
+                expect(result.output.endsWith(expectedEnding)).toBe(true);
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+    });
+
     describe('branch and remote classification', () => {
         it(
             'marks a merged local branch safe_delete and prunes redundant archives after apply',
@@ -2526,7 +2626,7 @@ describe('git-cleanup CLI', () => {
 
         describe('final proof rechecks', () => {
             it(
-                'removes delete guidance when the final proof recheck demotes a branch',
+                'keeps delete guidance when unrelated hidden refs appear during the final proof recheck',
                 () => {
                     const fixture = createGitFixture();
 
@@ -2548,21 +2648,7 @@ describe('git-cleanup CLI', () => {
                         ['git-cleanup'],
                         env,
                     );
-                    const reviewBranch = findBranchReport(
-                        auditReport,
-                        'needsReview',
-                        'feature',
-                    );
-
-                    expect(reviewBranch?.classification).toBe('needs_review');
-                    expect(reviewBranch?.state.safeToDelete).toBe(false);
-                    expect(reviewBranch?.deleteCommands).toEqual([]);
-                    expect(reviewBranch?.opinion.code).toBe(
-                        'needs_human_review',
-                    );
-                    expect(
-                        findBranchReport(auditReport, 'safeDelete', 'feature'),
-                    ).toBe(undefined);
+                    expectSafeDeleteBranch(auditReport);
                 },
                 gitCleanupIntegrationTimeoutMs,
             );
@@ -2654,7 +2740,7 @@ describe('git-cleanup CLI', () => {
             );
 
             it(
-                'removes delete guidance when replace refs appear during the final repository proof recheck',
+                'keeps delete guidance when replace refs do not appear until after the branch proof recheck',
                 () => {
                     const fixture = createGitFixture();
 
@@ -2675,27 +2761,14 @@ describe('git-cleanup CLI', () => {
                         ['git-cleanup'],
                         env,
                     );
-                    const reviewBranch = findBranchReport(
-                        auditReport,
-                        'needsReview',
-                        'feature',
-                    );
 
-                    expect(reviewBranch?.classification).toBe('needs_review');
-                    expect(reviewBranch?.state.safeToDelete).toBe(false);
-                    expect(reviewBranch?.deleteCommands).toEqual([]);
-                    expect(reviewBranch?.reasonDetails.join('\n')).toContain(
-                        'refs/replace',
-                    );
-                    expect(
-                        findBranchReport(auditReport, 'safeDelete', 'feature'),
-                    ).toBe(undefined);
+                    expectSafeDeleteBranch(auditReport);
                 },
                 gitCleanupIntegrationTimeoutMs,
             );
 
             it(
-                'removes delete guidance when hidden refs appear during the final repository proof recheck',
+                'keeps delete guidance when hidden refs appear during the final repository proof recheck',
                 () => {
                     const fixture = createGitFixture();
 
@@ -2713,27 +2786,13 @@ describe('git-cleanup CLI', () => {
                         ['git-cleanup'],
                         env,
                     );
-                    const reviewBranch = findBranchReport(
-                        auditReport,
-                        'needsReview',
-                        'feature',
-                    );
-
-                    expect(reviewBranch?.classification).toBe('needs_review');
-                    expect(reviewBranch?.state.safeToDelete).toBe(false);
-                    expect(reviewBranch?.deleteCommands).toEqual([]);
-                    expect(reviewBranch?.reasonDetails.join('\n')).toContain(
-                        'repository gained 1 reachable ref',
-                    );
-                    expect(
-                        findBranchReport(auditReport, 'safeDelete', 'feature'),
-                    ).toBe(undefined);
+                    expectSafeDeleteBranch(auditReport);
                 },
                 gitCleanupIntegrationTimeoutMs,
             );
 
             it(
-                'removes delete guidance when a detached worktree appears during the final proof recheck',
+                'keeps delete guidance when a detached worktree appears during the final proof recheck',
                 () => {
                     const fixture = createGitFixture();
 
@@ -2748,21 +2807,14 @@ describe('git-cleanup CLI', () => {
                         ['git-cleanup'],
                         env,
                     );
-                    const reviewBranch = findBranchReport(
-                        auditReport,
-                        'needsReview',
-                        'feature',
-                    );
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
 
-                    expect(reviewBranch?.classification).toBe('needs_review');
-                    expect(reviewBranch?.state.safeToDelete).toBe(false);
-                    expect(reviewBranch?.deleteCommands).toEqual([]);
-                    expect(reviewBranch?.reasonCodes).toContain(
-                        'detached_worktree_requires_manual_review',
+                    expect(safeDeleteBranch.deleteCommands).toEqual(
+                        expect.arrayContaining([
+                            expect.stringContaining('git-cleanup --apply'),
+                        ]),
                     );
-                    expect(
-                        findBranchReport(auditReport, 'safeDelete', 'feature'),
-                    ).toBe(undefined);
                     expect(
                         auditReport.detachedWorktrees.some(
                             (worktree) => !worktree.state.safeToRemoveManually,
@@ -2773,7 +2825,7 @@ describe('git-cleanup CLI', () => {
             );
 
             it(
-                'removes delete guidance when a final detached worktree has private refs outside main',
+                'keeps delete guidance when a final detached worktree has private refs outside main',
                 () => {
                     const fixture = createGitFixture();
 
@@ -2790,17 +2842,13 @@ describe('git-cleanup CLI', () => {
                         ['git-cleanup'],
                         env,
                     );
-                    const reviewBranch = findBranchReport(
-                        auditReport,
-                        'needsReview',
-                        'feature',
-                    );
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
 
-                    expect(reviewBranch?.classification).toBe('needs_review');
-                    expect(reviewBranch?.state.safeToDelete).toBe(false);
-                    expect(reviewBranch?.deleteCommands).toEqual([]);
-                    expect(reviewBranch?.reasonCodes).toContain(
-                        'detached_worktree_requires_manual_review',
+                    expect(safeDeleteBranch.deleteCommands).toEqual(
+                        expect.arrayContaining([
+                            expect.stringContaining('git-cleanup --apply'),
+                        ]),
                     );
                     expect(
                         auditReport.detachedWorktrees.some((worktree) =>
@@ -2809,9 +2857,6 @@ describe('git-cleanup CLI', () => {
                             ),
                         ),
                     ).toBe(true);
-                    expect(
-                        findBranchReport(auditReport, 'safeDelete', 'feature'),
-                    ).toBe(undefined);
                 },
                 gitCleanupIntegrationTimeoutMs,
             );
@@ -3073,7 +3118,7 @@ describe('git-cleanup CLI', () => {
             );
 
             it(
-                'restores both branch names if the local safety proof changes during the remote archive',
+                'restores the local branch if the remote proof changes during the remote archive',
                 () => {
                     const fixture = createGitFixture();
 
@@ -3103,7 +3148,7 @@ describe('git-cleanup CLI', () => {
                     expect(applyResult?.localBranchDeleted).toBe(false);
                     expect(applyResult?.remoteBranchDeleted).toBe(false);
                     expect(applyResult?.localBranchSkippedReason).toContain(
-                        'local repository safety proof changed',
+                        'remote branch was not archived after the local archive',
                     );
                     expect(applyResult?.remoteBranchSkippedReason).toContain(
                         'local tracking ref for origin/feature changed',
@@ -3280,11 +3325,14 @@ describe('git-cleanup CLI', () => {
         });
 
         it(
-            'reports the preserved local backup ref when local archive restore keeps it',
+            'keeps branch deletion when an unrelated dirty worktree appears after local archive',
             () => {
-                const { featureSha, fixture } =
-                    createDirtyLocalArchiveRestoreFixture();
+                const fixture = createGitFixture();
 
+                createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                    pushRemote: true,
+                });
+                installDirtyWorktreeOnLocalArchiveHook(fixture);
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
@@ -3300,17 +3348,12 @@ describe('git-cleanup CLI', () => {
                 ]);
                 const applyResult = findApplyResult(applyReport, 'feature');
 
-                expectLocalArchiveRestorePreservedBackup(
-                    fixture,
-                    featureSha,
-                    applyResult,
-                );
-                expect(applyResult?.localBranchSkippedReason).toContain(
-                    'original branch name was restored',
-                );
+                expect(applyResult?.localBranchDeleted).toBe(true);
+                expect(applyResult?.remoteBranchDeleted).toBe(true);
+                expect(applyResult?.localBranchSkippedReason).toBeNull();
                 expect(
                     git(fixture.repoPath, ['branch', '--list', 'feature']),
-                ).toContain('feature');
+                ).toBe('');
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -3452,7 +3495,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'fails closed when a live origin branch exists but the local branch has no upstream or tracking ref',
+            'keeps a no-upstream branch in review when the same-name origin branch moved beyond main',
             () => {
                 const fixture = createGitFixture();
 
@@ -3472,7 +3515,7 @@ describe('git-cleanup CLI', () => {
                 );
 
                 expect(reviewBranch?.reasonCodes).toContain(
-                    'origin_branch_identity_unverified',
+                    'origin_branch_live_tip_unverified',
                 );
                 expect(
                     findBranchReport(auditReport, 'safeDelete', 'feature'),
@@ -3482,7 +3525,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'keeps a merged branch in review when origin has a same-name branch but no upstream is configured',
+            'marks a merged same-name origin branch safe even when no upstream is configured',
             () => {
                 const fixture = createGitFixture();
 
@@ -3498,24 +3541,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'origin_branch_identity_unverified',
+                expect(safeDeleteBranch.remoteBranch?.shortName).toBe(
+                    'origin/feature',
                 );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when a no-upstream branch has no live origin branch but origin history is unproved',
+            'marks a no-upstream merged branch safe when the same-name origin branch is already absent',
             () => {
                 const fixture = createGitFixture();
 
@@ -3529,24 +3565,15 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'origin_branch_history_unverified',
-                );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                expect(safeDeleteBranch.remoteBranch?.status).toBe('absent');
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when a no-upstream branch has no live origin branch even if origin history is clean',
+            'marks a local-only merged branch safe when no same-name origin branch exists',
             () => {
                 const fixture = createGitFixture();
 
@@ -3555,18 +3582,9 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'origin_branch_history_unverified',
-                );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                expect(safeDeleteBranch.remoteBranch?.status).toBe('absent');
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -3684,7 +3702,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'fails closed when the repository contains unreachable non-commit objects',
+            'still marks a safe branch deleteable when unrelated unreachable objects exist',
             () => {
                 const fixture = createGitFixture();
 
@@ -3696,24 +3714,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_unreachable_commits_present',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryUnreachableCommitCount,
+                ).toBeGreaterThan(0);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when reachable hidden local refs still point to history outside main',
+            'still marks a safe branch deleteable when unrelated hidden local refs point outside main',
             () => {
                 const fixture = createGitFixture();
 
@@ -3726,24 +3737,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
+                expect(safeDeleteBranch.state.repositoryHiddenRefs).toContain(
+                    'refs/original/hidden-history',
                 );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when reachable non-commit refs exist outside the canonical history proof',
+            'still marks a safe branch deleteable when unrelated non-commit refs exist',
             () => {
                 const fixture = createGitFixture();
 
@@ -3756,24 +3760,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
+                expect(safeDeleteBranch.state.repositoryHiddenRefs).toContain(
+                    'refs/slop-refinery/blob-snapshot',
                 );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when an annotated tag object is not reachable from main',
+            'still marks a safe branch deleteable when an unrelated annotated tag object is retained',
             () => {
                 const fixture = createGitFixture();
 
@@ -3794,18 +3791,11 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryHiddenRefCount,
+                ).toBeGreaterThan(0);
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -3813,7 +3803,7 @@ describe('git-cleanup CLI', () => {
 
     describe('branch and remote classification retained ref safety', () => {
         it(
-            'fails closed when prior slop-refinery backup tags still point to history outside main',
+            'still marks a safe branch deleteable when prior backup tags point outside main',
             () => {
                 const fixture = createGitFixture();
 
@@ -3826,24 +3816,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
+                expect(safeDeleteBranch.state.repositoryHiddenRefs).toContain(
+                    'refs/tags/slop-refinery/git-cleanup/manual-backup',
                 );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when an earlier off-base git-cleanup archive branch still exists',
+            'still marks a safe branch deleteable when an earlier off-base archive branch exists',
             () => {
                 const fixture = createGitFixture();
 
@@ -3856,24 +3839,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
+                expect(safeDeleteBranch.state.repositoryHiddenRefs).toContain(
+                    'refs/heads/slop-refinery/archive/local/off-base/manual-check',
                 );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'reports protected main for review when only an archive ref carries off-base history',
+            'keeps protected main in review when its origin tracking proof is incomplete',
             () => {
                 const fixture = createGitFixture();
 
@@ -3891,18 +3867,20 @@ describe('git-cleanup CLI', () => {
                     'main',
                 );
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
+                expect(reviewBranch?.remoteBranch?.status).toBe(
+                    'history_unverified',
                 );
-                expect(auditReport.summary.needsReviewBranches).toBeGreaterThan(
-                    0,
-                );
+                expect(
+                    auditReport.branches.skipped.some(
+                        (branch) => branch.name === 'main',
+                    ),
+                ).toBe(false);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'reports protected main for review when the primary worktree is dirty',
+            'keeps protected main in review when it is checked out in a dirty primary worktree',
             () => {
                 const fixture = createGitFixture();
 
@@ -3921,15 +3899,16 @@ describe('git-cleanup CLI', () => {
                 );
 
                 expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_worktree_dirty',
+                    'linked_worktree_dirty',
                 );
-                expect(auditReport.summary.needsReviewBranches).toBeGreaterThan(
-                    0,
-                );
+                expect(
+                    auditReport.branches.skipped.some(
+                        (branch) => branch.name === 'main',
+                    ),
+                ).toBe(false);
             },
             gitCleanupIntegrationTimeoutMs,
         );
-
         it(
             'keeps detached worktrees in review when a sibling worktree is dirty',
             () => {
@@ -4032,9 +4011,6 @@ describe('git-cleanup CLI', () => {
                 expect(reviewBranch?.reasonCodes).toContain(
                     'origin_branch_tracking_ref_not_on_base',
                 );
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
-                );
                 expect(
                     findBranchReport(auditReport, 'safeDelete', 'feature'),
                 ).toBe(undefined);
@@ -4119,7 +4095,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'fails closed when the live origin branch is gone but remote-only history still survives in origin reflogs',
+            'marks a merged branch safe when the live origin branch is gone and tracking was pruned',
             () => {
                 const fixture = createGitFixture();
 
@@ -4133,23 +4109,9 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(
-                    reviewBranch?.reasonCodes.some(
-                        (reasonCode) =>
-                            reasonCode ===
-                                'origin_branch_history_not_on_base' ||
-                            reasonCode === 'origin_branch_history_unverified',
-                    ),
-                ).toBe(true);
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                expect(safeDeleteBranch.remoteBranch?.status).toBe('absent');
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -4157,7 +4119,7 @@ describe('git-cleanup CLI', () => {
 
     describe('local worktree safety', () => {
         it(
-            'fails closed when any repository worktree has uncommitted local state',
+            'still marks a safe branch deleteable when an unrelated repository worktree is dirty',
             () => {
                 const fixture = createGitFixture();
 
@@ -4172,18 +4134,11 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_worktree_dirty',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryWorktreeDirtyCount,
+                ).toBe(1);
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -4266,7 +4221,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'fails closed when repository-wide reflogs still retain non-base history after refs move back to main',
+            'still marks a safe branch deleteable when unrelated repository-wide reflogs retain non-base history',
             () => {
                 const fixture = createGitFixture();
 
@@ -4279,24 +4234,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_reflog_has_unique_commits',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryReflogUniqueCommitCount,
+                ).toBeGreaterThan(0);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when an attached linked worktree HEAD reflog still retains non-base history',
+            'still marks a safe branch deleteable when an unrelated linked worktree HEAD reflog retains non-base history',
             () => {
                 const fixture = createGitFixture();
                 const linkedWorktreePath = path.join(
@@ -4314,24 +4262,20 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_reflog_has_unique_commits',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryReflogUniqueCommitCount,
+                ).toBeGreaterThan(0);
+                expect(
+                    safeDeleteBranch.state.repositoryLinkedWorktreePaths,
+                ).toContain(realpathSync(linkedWorktreePath));
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when a dirty linked worktree path contains a newline',
+            'still marks a safe branch deleteable when an unrelated dirty linked worktree path contains a newline',
             () => {
                 const fixture = createGitFixture();
                 const cleanSiblingPath = path.join(
@@ -4361,29 +4305,19 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_worktree_dirty',
-                );
                 expect(
-                    reviewBranch?.state.repositoryWorktreeDirtyPaths.some(
+                    safeDeleteBranch.state.repositoryWorktreeDirtyPaths.some(
                         (dirtyPath) => dirtyPath.includes('\nspoof'),
                     ),
                 ).toBe(true);
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when a linked worktree-private ref points to history outside main',
+            'still marks a safe branch deleteable when an unrelated worktree-private ref points outside main',
             () => {
                 const fixture = createGitFixture();
                 const linkedWorktreePath = path.join(
@@ -4423,24 +4357,19 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryHiddenRefs.some((ref) =>
+                        ref.endsWith('/refs/worktree/private-ref'),
+                    ),
+                ).toBe(true);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when a linked worktree-private ref reflog retains history outside main',
+            'still marks a safe branch deleteable when an unrelated worktree-private ref reflog retains history outside main',
             () => {
                 const fixture = createGitFixture();
                 const linkedWorktreePath = path.join(
@@ -4490,24 +4419,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_reflog_has_unique_commits',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryReflogUniqueCommitCount,
+                ).toBeGreaterThan(0);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when a live off-base branch exists but its reflog file is missing',
+            'still marks a safe branch deleteable when another live off-base branch has no reflog',
             () => {
                 const fixture = createGitFixture();
 
@@ -4525,18 +4447,11 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_hidden_refs_present',
+                expect(safeDeleteBranch.state.repositoryHiddenRefs).toContain(
+                    'refs/heads/topic',
                 );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -4808,7 +4723,7 @@ describe('git-cleanup CLI', () => {
 
     describe('local worktree environment safety', () => {
         it(
-            'ignores inherited GIT_INDEX_FILE when checking repository worktree state',
+            'ignores inherited GIT_INDEX_FILE while leaving unrelated dirty state non-blocking',
             () => {
                 const fixture = createGitFixture();
                 const alternateIndexPath = path.join(
@@ -4829,18 +4744,11 @@ describe('git-cleanup CLI', () => {
                     ['git-cleanup'],
                     { GIT_INDEX_FILE: alternateIndexPath },
                 );
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_worktree_dirty',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryWorktreeDirtyCount,
+                ).toBe(1);
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -4851,7 +4759,7 @@ describe('git-cleanup CLI', () => {
             'packed-refs.lock',
             'refs/heads/feature.lock',
         ])(
-            'fails closed when a repository worktree has a Git lock: %s',
+            'keeps an otherwise safe branch deleteable when an unrelated repository worktree has a Git lock: %s',
             (lockRelativePath) => {
                 const fixture = createGitFixture();
 
@@ -4869,24 +4777,17 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_worktree_dirty',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryWorktreeDirtyCount,
+                ).toBe(1);
             },
             gitCleanupIntegrationTimeoutMs,
         );
 
         it(
-            'fails closed when a tracked gitlink is present without gitmodules',
+            'keeps an otherwise safe branch deleteable when a tracked gitlink is present without gitmodules',
             () => {
                 const fixture = createGitFixture();
 
@@ -4903,18 +4804,11 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'repository_worktree_dirty',
-                );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    safeDeleteBranch.state.repositoryWorktreeDirtyCount,
+                ).toBe(1);
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -5215,33 +5109,30 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'restores the local branch when the primary worktree becomes detached after archive',
+            'keeps the local branch deletion when the primary worktree becomes detached after archive',
             () => {
                 const fixture = createGitFixture();
 
                 createMergedFeatureBranch(fixture.repoPath, 'feature', {
                     pushRemote: true,
                 });
+                const remoteFeatureSha = readCurrentSha(
+                    fixture.repoPath,
+                    'feature',
+                );
                 installPrimaryDetachedWorktreeOnLocalArchiveHook(fixture);
 
                 const applyReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                     '--apply',
                 ]);
-                const applyResult = findApplyResult(applyReport, 'feature');
 
-                expect(applyResult?.localBranchDeleted).toBe(false);
-                expect(applyResult?.remoteBranchDeleted).toBe(false);
-                expect(applyResult?.localBranchSkippedReason).toContain(
-                    'repository-wide safety proof changed',
+                expectApplyAndPruneReport(
+                    applyReport,
+                    fixture,
+                    remoteFeatureSha,
                 );
-                expect(
-                    git(fixture.repoPath, [
-                        'for-each-ref',
-                        'refs/heads/feature',
-                        '--format=%(refname:short)',
-                    ]),
-                ).toBe('feature');
+                expectFeatureArchivesPruned(fixture);
                 expect(
                     git(fixture.repoPath, ['branch', '--show-current']),
                 ).toBe('');
@@ -5250,13 +5141,17 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'restores the local branch when the primary worktree checks out the archive after repository safety revalidation starts',
+            'keeps the local branch deletion when the primary worktree checks out the archive during revalidation',
             () => {
                 const fixture = createGitFixture();
 
                 createMergedFeatureBranch(fixture.repoPath, 'feature', {
                     pushRemote: true,
                 });
+                const remoteFeatureSha = readCurrentSha(
+                    fixture.repoPath,
+                    'feature',
+                );
                 const env =
                     installArchiveCheckoutDuringPostArchiveSafetyHook(fixture);
 
@@ -5265,12 +5160,11 @@ describe('git-cleanup CLI', () => {
                     ['git-cleanup', '--apply'],
                     env,
                 );
-                const applyResult = findApplyResult(applyReport, 'feature');
 
-                expect(applyResult?.localBranchDeleted).toBe(false);
-                expect(applyResult?.remoteBranchDeleted).toBe(false);
-                expect(applyResult?.localBranchSkippedReason).toContain(
-                    'observed in a worktree after repository-wide revalidation',
+                expectApplyAndPruneReport(
+                    applyReport,
+                    fixture,
+                    remoteFeatureSha,
                 );
                 expect(
                     git(fixture.repoPath, [
@@ -5278,7 +5172,7 @@ describe('git-cleanup CLI', () => {
                         'refs/heads/feature',
                         '--format=%(refname:short)',
                     ]),
-                ).toBe('feature');
+                ).toBe('');
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -5460,7 +5354,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'keeps branches in review when any detached worktree still has local-only commits',
+            'keeps a branch deleteable when a detached worktree still has local-only commits',
             () => {
                 const fixture = createGitFixture();
                 const detachedWorktreePath = path.join(
@@ -5478,18 +5372,18 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'detached_worktree_requires_manual_review',
+                expect(safeDeleteBranch.deleteCommands).toEqual(
+                    expect.arrayContaining([
+                        expect.stringContaining('git-cleanup --apply'),
+                    ]),
                 );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBe(undefined);
+                    auditReport.detachedWorktrees.some(
+                        (worktree) => !worktree.state.safeToRemoveManually,
+                    ),
+                ).toBe(true);
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -5567,17 +5461,12 @@ describe('git-cleanup CLI', () => {
                     ],
                 );
 
-                expect(archiveResult.ok).toBe(false);
-                expect(readCurrentSha(fixture.originPath, 'feature')).toBe(
+                expectRemoteArchiveTransactionFailedWithoutArchive(
+                    fixture,
+                    archiveResult,
                     featureSha,
+                    archiveBranchName,
                 );
-                expect(
-                    git(fixture.originPath, [
-                        'for-each-ref',
-                        `refs/heads/${archiveBranchName}`,
-                        '--format=%(refname:short)',
-                    ]),
-                ).toBe('');
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -5765,6 +5654,103 @@ describe('git-cleanup CLI', () => {
             },
             gitCleanupIntegrationTimeoutMs,
         );
+
+        describe('hosted origin deletion', () => {
+            it(
+                'marks hosted origin branches safe using live tip and local tracking evidence',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    createForcePushedRemoteHistoryNotOnBase(fixture, 'feature');
+                    makeOriginAppearHosted(fixture);
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(safeDeleteBranch.remoteBranch?.status).toBe('safe');
+                    expect(safeDeleteBranch.remoteBranch?.shortName).toBe(
+                        'origin/feature',
+                    );
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'deletes hosted origin branches with a force-with-lease guard',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    const remoteFeatureSha = readCurrentSha(
+                        fixture.originPath,
+                        'feature',
+                    );
+                    makeOriginAppearHosted(fixture);
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+
+                    expectSafeDeleteBranch(auditReport);
+
+                    const applyReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                        '--apply',
+                        '--keep-archives',
+                    ]);
+                    const applyResult = findApplyResult(applyReport, 'feature');
+
+                    expectHostedFeatureDeletedLocallyAndRemotely(
+                        fixture,
+                        applyResult,
+                        remoteFeatureSha,
+                    );
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'restores the local branch when a hosted origin branch moves after local archive',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    const secondClonePath =
+                        installOriginMoveAfterLocalArchive(fixture);
+                    makeOriginAppearHosted(fixture);
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+
+                    expectSafeDeleteBranch(auditReport);
+
+                    const applyReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                        '--apply',
+                    ]);
+                    const applyResult = findApplyResult(applyReport, 'feature');
+
+                    expectRemoteDriftRestoredLocalBranch(
+                        fixture,
+                        secondClonePath,
+                        applyReport,
+                        applyResult,
+                    );
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+        });
 
         it(
             'fails closed when hidden remote refs still preserve non-base history',
