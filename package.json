@@ -1,6 +1,6 @@
 {
     "name": "slop-refinery",
-    "version": "0.0.5",
+    "version": "0.0.6",
     "description": "Refines AI slop into clean code: correct, simple, maintainable",
     "type": "module",
     "license": "MIT",

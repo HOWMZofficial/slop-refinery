@@ -707,6 +707,32 @@ function expectHostedFeatureDeletedLocallyAndRemotely(
     expectArchivedBranchReflogExists(fixture.repoPath, localArchiveBranch);
 }
 
+function expectHostedAbsentFeatureDeletedLocally(
+    fixture: GitFixture,
+    applyResult:
+        | NonNullable<GitCleanupReportType['applyResults']>[number]
+        | undefined,
+    localFeatureSha: string,
+): void {
+    const localArchiveBranch = ensurePresent(
+        findArchivedBranch(fixture.repoPath, 'local', 'feature'),
+        'Expected a local archived branch for feature.',
+    );
+
+    expect(applyResult?.localBranchDeleted).toBe(true);
+    expect(applyResult?.remoteBranchDeleted).toBe(false);
+    expect(applyResult?.errors).toEqual([]);
+    expect(applyResult?.remoteBranchSkippedReason).toContain('already absent');
+    expect(git(fixture.repoPath, ['branch', '--list', 'feature'])).toBe('');
+    expect(
+        git(fixture.repoPath, ['ls-remote', 'origin', 'refs/heads/feature']),
+    ).toBe('');
+    expect(readCurrentSha(fixture.repoPath, localArchiveBranch)).toBe(
+        localFeatureSha,
+    );
+    expectArchivedBranchReflogExists(fixture.repoPath, localArchiveBranch);
+}
+
 function applyFeatureAndReadArchiveRefs(
     fixture: GitFixture,
     remoteFeatureSha: string,
@@ -1200,6 +1226,53 @@ function installRemoteBranchRecreateBeforeFinalAbsentProbe(
             '  if [ "$COUNT" -eq 3 ]; then',
             '    "$REAL_GIT" -C "$ORIGIN" branch "$BRANCH" main || exit $?',
             '  fi',
+            'fi',
+            'exec "$REAL_GIT" "$@"',
+            '',
+        ].join('\n'),
+    );
+    chmodSync(gitWrapperPath, 0o755);
+
+    return {
+        PATH: `${wrapperDir}${path.delimiter}${process.env.PATH ?? ''}`,
+    };
+}
+
+function installOriginHeadRepointAfterHostedDelete(
+    fixture: GitFixture,
+    branchName: string,
+    newDefaultBranch: string,
+): NodeJS.ProcessEnv {
+    const wrapperDir = path.join(
+        fixture.tempPath,
+        'git-wrapper-hosted-delete-head-drift',
+    );
+    const gitWrapperPath = path.join(wrapperDir, 'git');
+    const realGitPath = execFileSync('which', ['git'], {
+        encoding: 'utf8',
+    }).trim();
+
+    mkdirSync(wrapperDir, { recursive: true });
+    writeFile(
+        gitWrapperPath,
+        [
+            '#!/bin/sh',
+            `REAL_GIT=${shellQuote(realGitPath)}`,
+            `ORIGIN=${shellQuote(fixture.originPath)}`,
+            `BRANCH=${shellQuote(branchName)}`,
+            `NEW_DEFAULT=${shellQuote(newDefaultBranch)}`,
+            'if [ "$#" -eq 4 ] && [ "$1" = "push" ] && [ "$2" = "origin" ] && [ "$4" = ":refs/heads/$BRANCH" ]; then',
+            '  case "$3" in',
+            '    --force-with-lease=refs/heads/"$BRANCH":*)',
+            '      "$REAL_GIT" "$@"',
+            '      STATUS=$?',
+            '      if [ "$STATUS" -eq 0 ]; then',
+            '        "$REAL_GIT" -C "$ORIGIN" branch "$NEW_DEFAULT" main || exit $?',
+            '        "$REAL_GIT" -C "$ORIGIN" symbolic-ref HEAD "refs/heads/$NEW_DEFAULT" || exit $?',
+            '      fi',
+            '      exit "$STATUS"',
+            '      ;;',
+            '  esac',
             'fi',
             'exec "$REAL_GIT" "$@"',
             '',
@@ -2457,8 +2530,8 @@ afterEach(() => {
     }
 });
 
-const gitCleanupIntegrationTimeoutMs = 60_000;
-const gitCleanupLongIntegrationTimeoutMs = 180_000;
+const gitCleanupIntegrationTimeoutMs = 20 * 60_000;
+const gitCleanupLongIntegrationTimeoutMs = 30 * 60_000;
 
 describe('git-cleanup CLI', () => {
     describe('human-readable output', () => {
@@ -2489,7 +2562,7 @@ describe('git-cleanup CLI', () => {
         );
     });
 
-    describe('branch and remote classification', () => {
+    describe('branch apply basics', () => {
         it(
             'marks a merged local branch safe_delete and prunes redundant archives after apply',
             () => {
@@ -2535,7 +2608,9 @@ describe('git-cleanup CLI', () => {
             },
             gitCleanupIntegrationTimeoutMs,
         );
+    });
 
+    describe('branch and remote classification', () => {
         describe('archive pruning', () => {
             it(
                 'prunes redundant archive refs when run standalone',
@@ -3545,6 +3620,49 @@ describe('git-cleanup CLI', () => {
 
                 expect(safeDeleteBranch.remoteBranch?.shortName).toBe(
                     'origin/feature',
+                );
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+
+        it(
+            'applies cleanup for a merged same-name origin branch when no upstream is configured',
+            () => {
+                const fixture = createGitFixture();
+
+                createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                    pushRemote: true,
+                });
+                const remoteFeatureSha = readCurrentSha(
+                    fixture.repoPath,
+                    'feature',
+                );
+                git(
+                    fixture.repoPath,
+                    ['branch', '--unset-upstream', 'feature'],
+                    false,
+                );
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+
+                expect(
+                    safeDeleteBranch.remoteBranch?.remoteSafetyProofFingerprint,
+                ).not.toBeNull();
+
+                const applyReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                    '--apply',
+                    '--keep-archives',
+                ]);
+                const applyResult = findApplyResult(applyReport, 'feature');
+
+                expectFeatureDeletedLocallyAndRemotely(
+                    fixture,
+                    applyResult,
+                    remoteFeatureSha,
                 );
             },
             gitCleanupIntegrationTimeoutMs,
@@ -5682,6 +5800,44 @@ describe('git-cleanup CLI', () => {
             );
 
             it(
+                'keeps hosted origin branches in review when the local tracking ref is symbolic',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    makeOriginAppearHosted(fixture);
+                    git(
+                        fixture.repoPath,
+                        [
+                            'symbolic-ref',
+                            'refs/remotes/origin/feature',
+                            'refs/remotes/origin/main',
+                        ],
+                        false,
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const reviewBranch = findBranchReport(
+                        auditReport,
+                        'needsReview',
+                        'feature',
+                    );
+
+                    expect(reviewBranch?.reasonCodes).toContain(
+                        'origin_branch_identity_unverified',
+                    );
+                    expect(
+                        findBranchReport(auditReport, 'safeDelete', 'feature'),
+                    ).toBe(undefined);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
                 'deletes hosted origin branches with a force-with-lease guard',
                 () => {
                     const fixture = createGitFixture();
@@ -5718,6 +5874,47 @@ describe('git-cleanup CLI', () => {
             );
 
             it(
+                'applies local cleanup when a hosted origin branch is already absent',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    const localFeatureSha = readCurrentSha(
+                        fixture.repoPath,
+                        'feature',
+                    );
+                    deleteRemoteBranchFromSecondClone(fixture, 'feature');
+                    makeOriginAppearHosted(fixture);
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(safeDeleteBranch.remoteBranch?.status).toBe(
+                        'absent',
+                    );
+
+                    const applyReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                        '--apply',
+                        '--keep-archives',
+                    ]);
+                    const applyResult = findApplyResult(applyReport, 'feature');
+
+                    expectHostedAbsentFeatureDeletedLocally(
+                        fixture,
+                        applyResult,
+                        localFeatureSha,
+                    );
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
                 'restores the local branch when a hosted origin branch moves after local archive',
                 () => {
                     const fixture = createGitFixture();
@@ -5746,6 +5943,55 @@ describe('git-cleanup CLI', () => {
                         secondClonePath,
                         applyReport,
                         applyResult,
+                    );
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'restores hosted origin branches when final validation fails after delete',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    const originalFeatureSha = readCurrentSha(
+                        fixture.originPath,
+                        'feature',
+                    );
+                    makeOriginAppearHosted(fixture);
+                    const env = installOriginHeadRepointAfterHostedDelete(
+                        fixture,
+                        'feature',
+                        'alternate-main',
+                    );
+
+                    const auditReport = runGitCleanupJson(
+                        fixture.repoPath,
+                        ['git-cleanup'],
+                        env,
+                    );
+
+                    expectSafeDeleteBranch(auditReport);
+
+                    const applyReport = runGitCleanupJson(
+                        fixture.repoPath,
+                        ['git-cleanup', '--apply'],
+                        env,
+                    );
+                    const applyResult = findApplyResult(applyReport, 'feature');
+
+                    expect(applyResult?.localBranchDeleted).toBe(false);
+                    expect(applyResult?.remoteBranchDeleted).toBe(false);
+                    expect(applyResult?.remoteBranchSkippedReason).toContain(
+                        'live origin branch was restored',
+                    );
+                    expect(readCurrentSha(fixture.repoPath, 'feature')).toBe(
+                        originalFeatureSha,
+                    );
+                    expect(readCurrentSha(fixture.originPath, 'feature')).toBe(
+                        originalFeatureSha,
                     );
                 },
                 gitCleanupIntegrationTimeoutMs,

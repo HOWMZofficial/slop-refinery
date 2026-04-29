@@ -4066,14 +4066,33 @@ function assessBranchWithoutOriginUpstream(
         liveBranchProbe,
         localTrackingSha,
     );
+    const remoteSafetyProofFingerprint =
+        status === 'safe' || status === 'absent'
+            ? readRemoteSafetyProofFingerprint(
+                  repoRoot,
+                  base,
+                  branch,
+                  shortName,
+                  localTrackingSha,
+              )
+            : null;
+    const localTrackingProofFingerprint =
+        status === 'safe' || status === 'absent'
+            ? readSafeLocalTrackingProofFingerprint(
+                  repoRoot,
+                  base,
+                  shortName,
+                  localTrackingSha,
+              )
+            : null;
 
     return {
         branch,
         liveSha,
-        localTrackingProofFingerprint: null,
+        localTrackingProofFingerprint,
         localTrackingSha,
         remote: 'origin',
-        remoteSafetyProofFingerprint: null,
+        remoteSafetyProofFingerprint,
         shortName,
         status,
     };
@@ -4315,10 +4334,36 @@ function readPresentOriginRemoteBranchStatus(
         return liveTipStatus;
     }
 
+    const trackingIdentityStatus = readLocalTrackingRefIdentityStatus(
+        repoRoot,
+        trackingShortName,
+        liveSha,
+    );
+
+    if (trackingIdentityStatus !== 'safe') {
+        return trackingIdentityStatus;
+    }
+
     if (!originGitDirectoryIsLocallyInspectable(repoRoot, base)) {
         return 'safe';
     }
 
+    return readInspectablePresentOriginRemoteBranchStatus(
+        repoRoot,
+        base,
+        branch,
+        trackingShortName,
+        liveSha,
+    );
+}
+
+function readInspectablePresentOriginRemoteBranchStatus(
+    repoRoot: string,
+    base: BaseRef,
+    branch: string,
+    trackingShortName: string,
+    liveSha: string,
+): RemoteBranchStatus {
     const trackingStatus = readLocalTrackingRefStatus(
         repoRoot,
         base,
@@ -4378,6 +4423,25 @@ function readPresentOriginLiveTipStatus(
     ])
         ? 'safe'
         : 'live_tip_not_on_base';
+}
+
+function readLocalTrackingRefIdentityStatus(
+    repoRoot: string,
+    trackingShortName: string,
+    expectedSha: string,
+): Extract<
+    RemoteBranchStatus,
+    'identity_unverified' | 'live_tip_unverified' | 'safe'
+> {
+    const trackingRef = `refs/remotes/${trackingShortName}`;
+
+    if (isSymbolicRef(repoRoot, trackingRef)) {
+        return 'identity_unverified';
+    }
+
+    return readRefCommitSha(repoRoot, trackingRef) === expectedSha
+        ? 'safe'
+        : 'live_tip_unverified';
 }
 
 function originGitDirectoryIsLocallyInspectable(
@@ -7399,16 +7463,130 @@ function readSafeWithoutDeleteRemoteIssue(
         return 'remote cleanup did not archive the origin branch after the local archive.';
     }
 
-    const absentArchive = prepareAbsentRemoteArchive(
+    return readAbsentRemoteSafeWithoutDeleteIssue(
         repoRoot,
         base,
         branch.remoteBranch,
     );
+}
 
-    return absentArchive.status === 'blocked' &&
-        absentArchive.result.safeWithoutDelete === true
+function readAbsentRemoteSafeWithoutDeleteIssue(
+    repoRoot: string,
+    base: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+): null | string {
+    const validation = readAbsentRemoteSafeWithoutDeleteValidation(
+        repoRoot,
+        base,
+        remoteBranch,
+    );
+
+    return validation === null
         ? null
-        : `the absent origin branch proof changed after the local archive (${absentArchive.status === 'blocked' ? (absentArchive.result.skippedReason ?? 'remote cleanup was skipped') : 'remote cleanup became archiveable'})`;
+        : `the absent origin branch proof changed after the local archive (${validation})`;
+}
+
+function readAbsentRemoteSafeWithoutDeleteValidation(
+    repoRoot: string,
+    base: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+): null | string {
+    const latestBase = readAbsentRemoteSafeWithoutDeleteBase(repoRoot, base);
+
+    if (typeof latestBase === 'string') {
+        return latestBase;
+    }
+
+    const liveBranchProbe = readLiveOriginBranchProbe(
+        repoRoot,
+        remoteBranch.branch,
+    );
+    const latestLocalTrackingSha = readTrackedRemoteSha(
+        repoRoot,
+        remoteBranch.shortName,
+    );
+    const latestRemoteStatus = readOriginRemoteBranchStatus(
+        repoRoot,
+        latestBase,
+        remoteBranch.branch,
+        remoteBranch.shortName,
+        liveBranchProbe,
+        latestLocalTrackingSha,
+    );
+
+    if (latestRemoteStatus !== 'absent') {
+        return readAbsentRemoteStatusChangedIssue(
+            latestBase,
+            remoteBranch,
+            latestRemoteStatus,
+        );
+    }
+
+    return readAbsentRemoteProofChangeIssue(
+        repoRoot,
+        latestBase,
+        remoteBranch,
+        latestLocalTrackingSha,
+    );
+}
+
+function readAbsentRemoteSafeWithoutDeleteBase(
+    repoRoot: string,
+    base: BaseRef,
+): BaseRef | string {
+    try {
+        return detectBaseRef(repoRoot, base.ref, base.remoteUrl, base);
+    } catch (error) {
+        return `origin could not be revalidated: ${readUnknownErrorMessage(error)}`;
+    }
+}
+
+function readAbsentRemoteStatusChangedIssue(
+    latestBase: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+    latestRemoteStatus: Exclude<RemoteBranchStatus, 'absent'>,
+): string {
+    return latestRemoteStatus === 'safe'
+        ? `the live origin branch ${remoteBranch.shortName} reappeared before final validation`
+        : readRemoteDeleteSkippedReason(
+              latestBase.shortName,
+              remoteBranch.shortName,
+              latestRemoteStatus,
+          );
+}
+
+function readAbsentRemoteProofChangeIssue(
+    repoRoot: string,
+    latestBase: BaseRef,
+    remoteBranch: RemoteBranchAssessment,
+    latestLocalTrackingSha: null | string,
+): null | string {
+    const trackingIssue = readRemoteArchiveLocalTrackingProofIssue(
+        repoRoot,
+        latestBase,
+        remoteBranch,
+    );
+
+    if (trackingIssue !== null) {
+        return trackingIssue;
+    }
+
+    if (remoteBranch.remoteSafetyProofFingerprint === null) {
+        return null;
+    }
+
+    const latestRemoteSafetyProofFingerprint = readRemoteSafetyProofFingerprint(
+        repoRoot,
+        latestBase,
+        remoteBranch.branch,
+        remoteBranch.shortName,
+        latestLocalTrackingSha,
+    );
+
+    return latestRemoteSafetyProofFingerprint ===
+        remoteBranch.remoteSafetyProofFingerprint
+        ? null
+        : `the remote safety proof for ${remoteBranch.shortName} changed`;
 }
 
 function buildRestoredLocalBranchAfterRemoteFailure(
@@ -9610,16 +9788,108 @@ function pushHostedRemoteBranchDelete(
               errors: [],
               skippedReason: null,
           }
-        : {
-              archivedSha: null,
-              backupRef: null,
-              backupRepoPath: null,
-              deleted: false,
-              errors: [
-                  `remote branch ${remoteBranch.shortName}: ${finalIssue}`,
+        : buildHostedRemoteDeleteFinalFailureResult(
+              repoRoot,
+              remoteBranch,
+              liveSha,
+              finalIssue,
+          );
+}
+
+function buildHostedRemoteDeleteFinalFailureResult(
+    repoRoot: string,
+    remoteBranch: RemoteBranchAssessment,
+    liveSha: string,
+    finalIssue: string,
+): RemoteDeleteResult {
+    const liveBranchProbe = readLiveOriginBranchProbe(
+        repoRoot,
+        remoteBranch.branch,
+    );
+
+    return liveBranchProbe.kind === 'absent'
+        ? restoreHostedRemoteBranchAfterIssue(
+              repoRoot,
+              remoteBranch,
+              liveSha,
+              finalIssue,
+          )
+        : buildHostedRemoteDeleteUnrestoredFailureResult(
+              remoteBranch,
+              liveSha,
+              finalIssue,
+              liveBranchProbe,
+          );
+}
+
+function buildHostedRemoteDeleteUnrestoredFailureResult(
+    remoteBranch: RemoteBranchAssessment,
+    liveSha: string,
+    finalIssue: string,
+    liveBranchProbe: LiveOriginBranchProbe,
+): RemoteDeleteResult {
+    const branchState =
+        liveBranchProbe.kind === 'present'
+            ? `still exists at ${liveBranchProbe.sha.slice(0, 7)}`
+            : 'could not be rechecked';
+
+    return {
+        archivedSha: liveSha,
+        backupRef: null,
+        backupRepoPath: null,
+        deleted: false,
+        errors: [
+            `remote branch ${remoteBranch.shortName}: ${finalIssue}; the branch ${branchState}.`,
+        ],
+        skippedReason: null,
+    };
+}
+
+function restoreHostedRemoteBranchAfterIssue(
+    repoRoot: string,
+    remoteBranch: RemoteBranchAssessment,
+    liveSha: string,
+    issue: string,
+): RemoteDeleteResult {
+    const restoreResult = tryGit(repoRoot, [
+        'push',
+        'origin',
+        `--force-with-lease=refs/heads/${remoteBranch.branch}:`,
+        `${liveSha}:refs/heads/${remoteBranch.branch}`,
+    ]);
+    const restored = restoreResult.ok
+        ? hostedRemoteBranchRestored(repoRoot, remoteBranch, liveSha)
+        : false;
+
+    return {
+        archivedSha: liveSha,
+        backupRef: null,
+        backupRepoPath: null,
+        deleted: false,
+        errors: restored
+            ? []
+            : [
+                  `remote branch ${remoteBranch.shortName}: ${issue}; git-cleanup could not restore the branch${restoreResult.ok ? '' : `: ${restoreResult.error}`}.`,
               ],
-              skippedReason: null,
-          };
+        skippedReason: restored
+            ? `${issue}, so the live origin branch was restored.`
+            : `${issue}, and git-cleanup could not restore ${remoteBranch.shortName}.`,
+    };
+}
+
+function hostedRemoteBranchRestored(
+    repoRoot: string,
+    remoteBranch: RemoteBranchAssessment,
+    liveSha: string,
+): boolean {
+    const liveBranchProbe = readLiveOriginBranchProbe(
+        repoRoot,
+        remoteBranch.branch,
+    );
+
+    return (
+        liveBranchProbe.kind === 'present' && liveBranchProbe.sha === liveSha
+    );
 }
 
 function readHostedRemoteDeleteFinalIssue(
@@ -9942,24 +10212,17 @@ function prepareAbsentRemoteArchive(
     );
 
     if (latestRemoteStatus === 'absent') {
-        const latestRemoteSafetyProofFingerprint =
-            readRemoteSafetyProofFingerprint(
-                repoRoot,
-                latestBase,
-                remoteBranch.branch,
-                remoteBranch.shortName,
-                latestLocalTrackingSha,
-            );
+        const proofIssue = readAbsentRemoteProofChangeIssue(
+            repoRoot,
+            latestBase,
+            remoteBranch,
+            latestLocalTrackingSha,
+        );
 
-        if (
-            remoteBranch.remoteSafetyProofFingerprint === null ||
-            latestRemoteSafetyProofFingerprint === null ||
-            latestRemoteSafetyProofFingerprint !==
-                remoteBranch.remoteSafetyProofFingerprint
-        ) {
+        if (proofIssue !== null) {
             return {
                 result: buildRemoteDeleteSkippedResult(
-                    `the remote safety proof for ${remoteBranch.shortName} changed before remote cleanup, so remote deletion was skipped.`,
+                    `${proofIssue} before remote cleanup, so remote deletion was skipped.`,
                 ),
                 status: 'blocked',
             };
