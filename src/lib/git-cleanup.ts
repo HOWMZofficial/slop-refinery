@@ -325,6 +325,7 @@ type Opinion = {
 
 type Options = {
     apply: boolean;
+    applyCommand?: string;
     base: null | string;
     json: boolean;
     keepArchives: boolean;
@@ -541,6 +542,7 @@ export type GitCleanupWorktreeInfo = WorktreeInfo;
 
 const BACKUP_SUFFIX_LENGTH = 8;
 const COMMIT_FORMAT = '%H%x1f%cI%x1f%an%x1f%s';
+const DEFAULT_APPLY_COMMAND = 'slop-refinery git-cleanup --apply';
 const GIT_ADMIN_DIRECTORIES = ['rebase-apply', 'rebase-merge', 'sequencer'];
 const GIT_ADMIN_FILES = [
     'AUTO_MERGE',
@@ -1239,6 +1241,7 @@ export function renderGitCleanupOutput(
 function parseArgs(args: readonly string[]): Options {
     return parseArgsFromIndex(args, 0, {
         apply: false,
+        applyCommand: DEFAULT_APPLY_COMMAND,
         base: null,
         json: false,
         keepArchives: false,
@@ -1398,6 +1401,7 @@ function buildReportContext(options: Options): GitCleanupReportContext {
         hiddenRefAnalysis,
         repositoryReflogAnalysis,
         unreachableCommitAnalysis,
+        options.applyCommand ?? DEFAULT_APPLY_COMMAND,
     );
     const finalBaseIssue = readLiveBaseValidationIssue(repoRoot, base);
     const revalidatedBranches =
@@ -2094,6 +2098,10 @@ function reconcileApplyReportBranches(
             applyResult,
         );
 
+        if (reconciledBranch === null) {
+            continue;
+        }
+
         if (reconciledBranch.classification === 'safe_delete') {
             safeDelete.push(reconciledBranch);
         } else {
@@ -2113,12 +2121,9 @@ function reconcileSafeDeleteBranchAfterApply(
     base: BaseRef,
     branch: BranchReport,
     applyResult: ApplyResult | undefined,
-): BranchReport {
+): BranchReport | null {
     if (applyResultCompletedLocalDeletion(applyResult)) {
-        return convertAppliedSafeDeleteBranchToPostApplyReport(
-            branch,
-            applyResult,
-        );
+        return null;
     }
 
     if (!branchRefExists(repoRoot, branch.name)) {
@@ -2161,55 +2166,6 @@ function applyResultCompletedLocalDeletion(
         result.errors.length === 0 &&
         result.localBranchDeleted
     );
-}
-
-function convertAppliedSafeDeleteBranchToPostApplyReport(
-    branch: BranchReport,
-    applyResult: ApplyResult,
-): BranchReport {
-    const remoteBranch = applyResult.remoteBranchDeleted
-        ? readArchivedRemoteBranchPostApplyState(branch.remoteBranch)
-        : branch.remoteBranch;
-    const originBranchStatus = applyResult.remoteBranchDeleted
-        ? 'absent'
-        : branch.state.originBranchStatus;
-
-    return {
-        ...branch,
-        classification: 'needs_review',
-        deleteCommands: [],
-        opinion: {
-            code: 'keep_for_review',
-            label: 'apply completed',
-            reason: `git-cleanup already archived ${branch.name} during --apply, so no further delete command is emitted for the stale branch name.`,
-        },
-        reasonDetails: [
-            ...branch.reasonDetails,
-            `git-cleanup --apply already archived ${branch.name}; this post-apply report intentionally omits delete guidance for the stale branch name.`,
-        ],
-        remoteBranch,
-        state: {
-            ...branch.state,
-            originBranchStatus,
-            safeToDelete: false,
-            safetyProofFingerprint: null,
-        },
-    };
-}
-
-function readArchivedRemoteBranchPostApplyState(
-    remoteBranch: null | RemoteBranchAssessment,
-): null | RemoteBranchAssessment {
-    return remoteBranch === null
-        ? null
-        : {
-              ...remoteBranch,
-              liveSha: null,
-              localTrackingProofFingerprint: null,
-              localTrackingSha: null,
-              remoteSafetyProofFingerprint: null,
-              status: 'absent',
-          };
 }
 
 function readApplyResultIssue(
@@ -3622,6 +3578,7 @@ function buildBranchBuckets(
     hiddenRefAnalysis: HiddenRefAnalysis,
     repositoryReflogAnalysis: ReflogAnalysis,
     unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
+    applyCommand: string,
 ): BranchBuckets {
     const skipped: SkippedBranchReport[] = [];
     const safeDelete: BranchReport[] = [];
@@ -3637,6 +3594,7 @@ function buildBranchBuckets(
             hiddenRefAnalysis,
             repositoryReflogAnalysis,
             unreachableCommitAnalysis,
+            applyCommand,
         );
 
         if (branch === base.branchName) {
@@ -3709,6 +3667,7 @@ function buildBranchReport(
     hiddenRefAnalysis: HiddenRefAnalysis,
     repositoryReflogAnalysis: ReflogAnalysis,
     unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
+    applyCommand = DEFAULT_APPLY_COMMAND,
 ): BranchReport {
     const linkedWorktrees = worktrees.filter(
         (worktree) => worktree.branchName === branch,
@@ -3756,6 +3715,7 @@ function buildBranchReport(
             linkedWorktrees,
             remoteBranch,
             state,
+            applyCommand,
         ),
         linkedWorktrees,
         name: branch,
@@ -5313,13 +5273,14 @@ function buildDeleteCommands(
     _linkedWorktrees: readonly WorktreeInfo[],
     remoteBranch: null | RemoteBranchAssessment,
     state: BranchState,
+    applyCommand: string,
 ): string[] {
     if (!state.safeToDelete) {
         return [];
     }
 
     const commands = [
-        `slop-refinery git-cleanup --apply # revalidate and archive ${shellQuote(branch)} safely`,
+        `${applyCommand} # revalidate and archive ${shellQuote(branch)} safely`,
     ];
 
     if (remoteBranch !== null) {
@@ -11047,15 +11008,39 @@ function renderSafeDeleteActionSummary(
 function renderApplyCommandActionSummary(
     safeDeleteBranches: readonly BranchReport[],
 ): string[] {
-    return safeDeleteBranches.length === 0
+    const applyCommand = readApplyCommandFromBranches(safeDeleteBranches);
+
+    return applyCommand === null
         ? []
-        : ['- To delete them: `slop-refinery git-cleanup --apply`.'];
+        : [`- To delete them: \`${applyCommand}\`.`];
 }
 
 function renderNeedsReviewActionSummary(
     needsReviewBranches: readonly BranchReport[],
 ): string {
     return `- Manual review: ${renderBranchNameList(needsReviewBranches)}.`;
+}
+
+function readApplyCommandFromBranches(
+    branches: readonly BranchReport[],
+): null | string {
+    for (const branch of branches) {
+        const [deleteCommand] = branch.deleteCommands;
+
+        if (deleteCommand !== undefined) {
+            return stripDeleteCommandComment(deleteCommand);
+        }
+    }
+
+    return null;
+}
+
+function stripDeleteCommandComment(deleteCommand: string): string {
+    const commentStart = deleteCommand.indexOf(' # revalidate and archive ');
+
+    return commentStart === -1
+        ? deleteCommand
+        : deleteCommand.slice(0, commentStart);
 }
 
 function renderBranchNameList(branches: readonly { name: string }[]): string {

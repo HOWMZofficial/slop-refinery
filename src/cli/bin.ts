@@ -178,6 +178,12 @@ function getRulesetUsage(): string {
     ].join('\n');
 }
 
+function getGitCleanupApplyCommand(): string {
+    return process.env.npm_lifecycle_event === 'git-cleanup'
+        ? 'npm run git-cleanup -- --apply'
+        : 'slop-refinery git-cleanup --apply';
+}
+
 function parseRepoSlug(repoSlug: string): {
     owner: string;
     repo: string;
@@ -284,7 +290,10 @@ async function run(): Promise<void> {
             return;
         }
 
-        const options = parseGitCleanupArgs(resourceArgs);
+        const options = {
+            ...parseGitCleanupArgs(resourceArgs),
+            applyCommand: getGitCleanupApplyCommand(),
+        };
         const report = buildGitCleanupReport(options);
 
         console.log(renderGitCleanupOutput(report, options.json));

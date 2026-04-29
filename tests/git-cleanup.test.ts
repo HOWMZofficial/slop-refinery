@@ -820,18 +820,14 @@ function expectNoPostApplyDeleteGuidance(
     applyReport: GitCleanupReportType,
     branchName: string,
 ): void {
-    const postApplyBranch = findBranchReport(
-        applyReport,
-        'needsReview',
-        branchName,
-    );
-
     expect(findBranchReport(applyReport, 'safeDelete', branchName)).toBe(
         undefined,
     );
-    expect(postApplyBranch?.deleteCommands).toEqual([]);
-    expect(postApplyBranch?.opinion.reason).toContain(
-        'no further delete command',
+    expect(findBranchReport(applyReport, 'needsReview', branchName)).toBe(
+        undefined,
+    );
+    expect(findApplyResult(applyReport, branchName)?.localBranchDeleted).toBe(
+        true,
     );
 }
 
@@ -881,7 +877,7 @@ function expectSafeDeleteCommandsUseGuardedApply(
 ): void {
     expect(branch?.deleteCommands).toEqual(
         expect.arrayContaining([
-            expect.stringContaining('git-cleanup --apply'),
+            expect.stringContaining('slop-refinery git-cleanup --apply'),
         ]),
     );
     expect(branch?.deleteCommands.join('\n')).not.toContain('git branch -m');
@@ -2560,6 +2556,66 @@ describe('git-cleanup CLI', () => {
             },
             gitCleanupIntegrationTimeoutMs,
         );
+
+        it(
+            'uses npm apply guidance when invoked from the npm git-cleanup script',
+            () => {
+                const fixture = createGitFixture();
+
+                createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                    pushRemote: true,
+                });
+
+                const result = runGitCleanup(
+                    fixture.repoPath,
+                    ['git-cleanup'],
+                    {
+                        npm_lifecycle_event: 'git-cleanup',
+                    },
+                );
+                const expectedEnding = [
+                    '## Action Summary',
+                    '- Delete candidates: `feature`.',
+                    '- To delete them: `npm run git-cleanup -- --apply`.',
+                    '- Manual review: none.',
+                    '- Detached worktrees: none.',
+                ].join('\n');
+
+                expect(result.status).toBe(0);
+                expect(result.output.endsWith(expectedEnding)).toBe(true);
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+
+        it(
+            'omits applied branches from manual review in human-readable apply output',
+            () => {
+                const fixture = createGitFixture();
+
+                createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                    pushRemote: true,
+                });
+                createUnmergedRemoteBranch(fixture.repoPath, 'review');
+                makeOriginAppearHosted(fixture);
+
+                const result = runGitCleanup(fixture.repoPath, [
+                    'git-cleanup',
+                    '--apply',
+                ]);
+                const expectedEnding = [
+                    '## Action Summary',
+                    '- Applied deletes: `feature` (local deleted, origin deleted).',
+                    '- Archive pruning: 1 pruned, 0 kept.',
+                    '- Delete candidates: none.',
+                    '- Manual review: `review`.',
+                    '- Detached worktrees: none.',
+                ].join('\n');
+
+                expect(result.status).toBe(0);
+                expect(result.output.endsWith(expectedEnding)).toBe(true);
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
     });
 
     describe('branch apply basics', () => {
@@ -2887,7 +2943,9 @@ describe('git-cleanup CLI', () => {
 
                     expect(safeDeleteBranch.deleteCommands).toEqual(
                         expect.arrayContaining([
-                            expect.stringContaining('git-cleanup --apply'),
+                            expect.stringContaining(
+                                'slop-refinery git-cleanup --apply',
+                            ),
                         ]),
                     );
                     expect(
@@ -2922,7 +2980,9 @@ describe('git-cleanup CLI', () => {
 
                     expect(safeDeleteBranch.deleteCommands).toEqual(
                         expect.arrayContaining([
-                            expect.stringContaining('git-cleanup --apply'),
+                            expect.stringContaining(
+                                'slop-refinery git-cleanup --apply',
+                            ),
                         ]),
                     );
                     expect(
@@ -5494,7 +5554,9 @@ describe('git-cleanup CLI', () => {
 
                 expect(safeDeleteBranch.deleteCommands).toEqual(
                     expect.arrayContaining([
-                        expect.stringContaining('git-cleanup --apply'),
+                        expect.stringContaining(
+                            'slop-refinery git-cleanup --apply',
+                        ),
                     ]),
                 );
                 expect(
