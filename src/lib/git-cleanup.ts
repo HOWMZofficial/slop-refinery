@@ -20,6 +20,7 @@ type BranchClassification = 'needs_review' | 'protected_base' | 'safe_delete';
 type BranchReasonCode =
     | 'branch_checked_out_in_primary_worktree'
     | 'branch_content_equivalent_to_base'
+    | 'branch_patch_equivalent_to_base'
     | 'branch_reflog_has_unique_commits'
     | 'branch_reflog_unavailable'
     | 'branch_tip_not_on_base'
@@ -42,6 +43,7 @@ type BranchReasonCode =
     | 'origin_branch_live_tip_not_on_base'
     | 'origin_branch_live_tip_unverified'
     | 'origin_branch_non_origin_upstream'
+    | 'origin_branch_patch_equivalent_to_base'
     | 'origin_branch_protected_base'
     | 'origin_branch_tracking_ref_not_on_base'
     | 'repository_hidden_refs_present'
@@ -86,6 +88,7 @@ type RemoteBranchStatus =
     | 'live_tip_not_on_base'
     | 'live_tip_unverified'
     | 'non_origin_upstream'
+    | 'patch_equivalent_to_base'
     | 'protected_base'
     | 'safe'
     | 'tracking_ref_not_on_base';
@@ -199,6 +202,7 @@ type BranchState = {
     linkedWorktreeCount: number;
     mergedByHistory: boolean;
     originBranchStatus: RemoteBranchStatus;
+    patchEquivalentToBase: boolean;
     repositoryHiddenRefCount: number;
     repositoryHiddenRefs: string[];
     repositoryHiddenRefsAvailable: boolean;
@@ -3846,7 +3850,7 @@ function readBranchReflogAnalysis(
 
     const parsedReflog = readReflogShas(reflogPath);
 
-    if (parsedReflog === null || parsedReflog.shas.length === 0) {
+    if (parsedReflog === null) {
         return {
             available: false,
             fingerprint: null,
@@ -3945,19 +3949,27 @@ function countReflogOnlyCommits(
             return null;
         }
 
-        if (
-            !gitSucceeded(repoRoot, [
-                'merge-base',
-                '--is-ancestor',
-                sha,
-                baseRef,
-            ])
-        ) {
+        if (!commitIsPracticallyPreserved(repoRoot, baseRef, sha)) {
             uniqueCommitShas.push(sha);
         }
     }
 
     return uniqueCommitShas.length;
+}
+
+function commitIsPracticallyPreserved(
+    repoRoot: string,
+    baseRef: string,
+    commitSha: string,
+): boolean {
+    return (
+        gitSucceeded(repoRoot, [
+            'merge-base',
+            '--is-ancestor',
+            commitSha,
+            baseRef,
+        ]) || refPatchEquivalentToBase(repoRoot, baseRef, commitSha)
+    );
 }
 
 function assessRemoteBranch(
@@ -4197,6 +4209,7 @@ function remoteBranchStatusHasSafeProof(status: RemoteBranchStatus): boolean {
     return (
         status === 'absent' ||
         status === 'content_equivalent_to_base' ||
+        status === 'patch_equivalent_to_base' ||
         status === 'safe'
     );
 }
@@ -4376,6 +4389,7 @@ function readPresentOriginLiveTipStatus(
     | 'identity_unverified'
     | 'live_tip_not_on_base'
     | 'live_tip_unverified'
+    | 'patch_equivalent_to_base'
     | 'safe'
 > {
     if (isLocalOriginBranchSymbolicRef(repoRoot, base, branch)) {
@@ -4397,8 +4411,12 @@ function readPresentOriginLiveTipStatus(
         return 'safe';
     }
 
-    return refsHaveSameTree(repoRoot, base.liveSha, liveSha)
-        ? 'content_equivalent_to_base'
+    if (refsHaveSameTree(repoRoot, base.liveSha, liveSha)) {
+        return 'content_equivalent_to_base';
+    }
+
+    return refPatchEquivalentToBase(repoRoot, base.liveSha, liveSha)
+        ? 'patch_equivalent_to_base'
         : 'live_tip_not_on_base';
 }
 
@@ -5034,6 +5052,11 @@ function buildBranchState(
         baseRef,
     ]);
     const contentEquivalentToBase = refsHaveSameTree(repoRoot, baseRef, branch);
+    const patchEquivalentToBase = refPatchEquivalentToBase(
+        repoRoot,
+        baseRef,
+        branch,
+    );
     const duplicateTreeRefs = readDuplicateTreeRefs(repoRoot, baseRef, branch);
     const originBranchStatus = remoteBranch?.status ?? 'absent';
     const hasBlockingDetachedWorktree = detachedWorktrees.some(
@@ -5043,11 +5066,12 @@ function buildBranchState(
         readRepositoryLinkedWorktreePaths(worktrees);
     const safeToDelete = isBranchSafeToDelete(
         branch,
-        branchReflogAnalysis.available,
+        branchReflogAnalysis,
         linkedWorktreeFlags,
         branchTipIsPracticallyPreserved(
             mergedByHistory,
             contentEquivalentToBase,
+            patchEquivalentToBase,
         ),
         linkedWorktrees.length,
         remoteBranch,
@@ -5058,6 +5082,7 @@ function buildBranchState(
         linkedWorktreeFlags,
         mergedByHistory,
         contentEquivalentToBase,
+        patchEquivalentToBase,
         linkedWorktrees.length,
         remoteBranch,
     );
@@ -5079,6 +5104,7 @@ function buildBranchState(
         linkedWorktreeCount: linkedWorktrees.length,
         mergedByHistory,
         originBranchStatus,
+        patchEquivalentToBase,
         repositoryHiddenRefCount: hiddenRefAnalysis.refs.length,
         repositoryHiddenRefs: hiddenRefAnalysis.refs,
         repositoryHiddenRefsAvailable: hiddenRefAnalysis.available,
@@ -5106,6 +5132,7 @@ function buildBranchSafetyProofFingerprint(
     linkedWorktreeFlags: ReturnType<typeof readLinkedWorktreeFlags>,
     mergedByHistory: boolean,
     contentEquivalentToBase: boolean,
+    patchEquivalentToBase: boolean,
     linkedWorktreeCount: number,
     remoteBranch: null | RemoteBranchAssessment,
 ): null | string {
@@ -5120,6 +5147,7 @@ function buildBranchSafetyProofFingerprint(
             linkedWorktreeCount,
             linkedWorktreeFlags,
             mergedByHistory,
+            patchEquivalentToBase,
             remoteBranch,
         }),
     );
@@ -5164,6 +5192,23 @@ function readTreeSha(repoRoot: string, ref: string): null | string {
     const result = tryGit(repoRoot, ['rev-parse', `${ref}^{tree}`]);
 
     return result.ok && result.stdout !== '' ? result.stdout : null;
+}
+
+function refPatchEquivalentToBase(
+    repoRoot: string,
+    baseRef: string,
+    ref: string,
+): boolean {
+    const result = tryGit(repoRoot, ['cherry', baseRef, ref]);
+
+    if (!result.ok) {
+        return false;
+    }
+
+    return result.stdout
+        .split('\n')
+        .filter((line) => line !== '')
+        .every((line) => line.startsWith('-'));
 }
 
 function readDuplicateTreeRefs(
@@ -5260,14 +5305,15 @@ function readWorktreesSafely(repoPath: string): null | WorktreeInfo[] {
 
 function isBranchSafeToDelete(
     branch: string,
-    branchReflogAvailable: boolean,
+    branchReflogAnalysis: ReflogAnalysis,
     linkedWorktreeFlags: ReturnType<typeof readLinkedWorktreeFlags>,
     branchTipPreserved: boolean,
     linkedWorktreeCount: number,
     remoteBranch: null | RemoteBranchAssessment,
 ): boolean {
     return (
-        branchReflogAvailable &&
+        branchReflogAnalysis.available &&
+        branchReflogAnalysis.uniqueCommitCount === 0 &&
         branchTipPreserved &&
         isRemoteBranchSafeToDelete(branch, remoteBranch) &&
         hasNoBlockingLinkedWorktrees(linkedWorktreeCount, linkedWorktreeFlags)
@@ -5277,8 +5323,9 @@ function isBranchSafeToDelete(
 function branchTipIsPracticallyPreserved(
     mergedByHistory: boolean,
     contentEquivalentToBase: boolean,
+    patchEquivalentToBase: boolean,
 ): boolean {
-    return mergedByHistory || contentEquivalentToBase;
+    return mergedByHistory || contentEquivalentToBase || patchEquivalentToBase;
 }
 
 function hasNoBlockingLinkedWorktrees(
@@ -5331,9 +5378,13 @@ function remoteBranchStatusIsSafeForDelete(
     status: RemoteBranchStatus,
 ): status is Extract<
     RemoteBranchStatus,
-    'content_equivalent_to_base' | 'safe'
+    'content_equivalent_to_base' | 'patch_equivalent_to_base' | 'safe'
 > {
-    return status === 'safe' || status === 'content_equivalent_to_base';
+    return (
+        status === 'safe' ||
+        status === 'content_equivalent_to_base' ||
+        status === 'patch_equivalent_to_base'
+    );
 }
 
 function summarizeBranchActivity(
@@ -5353,6 +5404,10 @@ function summarizeBranchActivity(
 
     if (state.contentEquivalentToBase) {
         return `the branch tip is not reachable from ${baseShort}, but its file tree matches ${baseShort}; latest commit is ${latestCommit} from ${lastCommit.dateIso.slice(0, 10)}.`;
+    }
+
+    if (state.patchEquivalentToBase) {
+        return `the branch tip is not reachable from ${baseShort}, but its patch is already represented on ${baseShort}; latest commit is ${latestCommit} from ${lastCommit.dateIso.slice(0, 10)}.`;
     }
 
     return `${state.uniqueCommitCount} commit(s) are still not reachable from ${baseShort}; latest commit is ${latestCommit} from ${lastCommit.dateIso.slice(0, 10)}.`;
@@ -5440,24 +5495,22 @@ function decideBranchOpinion(
     lastCommit: CommitInfo,
     state: BranchState,
 ): Opinion {
-    if (
-        state.safeToDelete &&
-        state.contentEquivalentToBase &&
-        !state.branchTipOnBase
-    ) {
-        return {
-            code: 'delete',
-            label: 'delete',
-            reason: 'the local branch and any auto-deletable origin branch have the same file content as the canonical origin default branch, and the branch is not checked out in any worktree.',
-        };
+    if (branchCanDeleteByContentEquivalence(state)) {
+        return buildDeleteOpinion(
+            'the local branch and any auto-deletable origin branch have the same file content as the canonical origin default branch, and the branch is not checked out in any worktree.',
+        );
+    }
+
+    if (branchCanDeleteByPatchEquivalence(state)) {
+        return buildDeleteOpinion(
+            'the local branch and any auto-deletable origin branch have changes already represented on the canonical origin default branch, and the branch is not checked out in any worktree.',
+        );
     }
 
     if (state.safeToDelete) {
-        return {
-            code: 'delete',
-            label: 'delete',
-            reason: 'the local branch and any auto-deletable origin branch are proven preserved on the canonical origin default branch, and the branch is not checked out in any worktree.',
-        };
+        return buildDeleteOpinion(
+            'the local branch and any auto-deletable origin branch are proven preserved on the canonical origin default branch, and the branch is not checked out in any worktree.',
+        );
     }
 
     if (isKeptOnlyByProofGaps(state)) {
@@ -5487,6 +5540,30 @@ function decideBranchOpinion(
         code: 'needs_human_review',
         label: 'needs human review',
         reason: 'git-cleanup cannot prove that every reachable or reflog-only commit is already preserved on origin’s canonical default branch.',
+    };
+}
+
+function branchCanDeleteByContentEquivalence(state: BranchState): boolean {
+    return (
+        state.safeToDelete &&
+        state.contentEquivalentToBase &&
+        !state.branchTipOnBase
+    );
+}
+
+function branchCanDeleteByPatchEquivalence(state: BranchState): boolean {
+    return (
+        state.safeToDelete &&
+        state.patchEquivalentToBase &&
+        !state.branchTipOnBase
+    );
+}
+
+function buildDeleteOpinion(reason: string): Opinion {
+    return {
+        code: 'delete',
+        label: 'delete',
+        reason,
     };
 }
 
@@ -5526,6 +5603,11 @@ function collectBranchReasonCodes(
         ...(state.contentEquivalentToBase && !state.branchTipOnBase
             ? (['branch_content_equivalent_to_base'] as const)
             : []),
+        ...(state.patchEquivalentToBase &&
+        !state.contentEquivalentToBase &&
+        !state.branchTipOnBase
+            ? (['branch_patch_equivalent_to_base'] as const)
+            : []),
         ...(state.safeToDelete ? [] : readBranchReflogReasonCodes(state)),
         ...(!state.safeToDelete && state.hasBlockingDetachedWorktree
             ? (['detached_worktree_requires_manual_review'] as const)
@@ -5557,7 +5639,7 @@ function readOriginBranchReasonCodes(
 ): BranchReasonCode[] {
     const reasonCode = readOriginBranchReasonCode(status);
     const targetMismatchReasonCode: BranchReasonCode | null =
-        (status === 'safe' || status === 'absent') &&
+        (status === 'absent' || remoteBranchStatusIsSafeForDelete(status)) &&
         remoteBranch !== null &&
         remoteBranch.branch !== branch
             ? 'origin_branch_delete_target_mismatch'
@@ -5589,6 +5671,7 @@ function readOriginBranchReasonCode(
         live_tip_not_on_base: 'origin_branch_live_tip_not_on_base',
         live_tip_unverified: 'origin_branch_live_tip_unverified',
         non_origin_upstream: 'origin_branch_non_origin_upstream',
+        patch_equivalent_to_base: 'origin_branch_patch_equivalent_to_base',
         protected_base: 'origin_branch_protected_base',
         tracking_ref_not_on_base: 'origin_branch_tracking_ref_not_on_base',
     };
@@ -5681,6 +5764,12 @@ function readBranchTipReasonDetails(
         ];
     }
 
+    if (state.patchEquivalentToBase) {
+        return [
+            `the branch tip is not reachable from ${baseShort}, but its patch is already represented on ${baseShort}.`,
+        ];
+    }
+
     if (!state.hasCommonAncestor) {
         return [
             `the branch does not share a common ancestor with ${baseShort}.`,
@@ -5714,12 +5803,12 @@ function buildBranchReflogReasonDetails(
 
     if (state.branchReflogUniqueCommitCount > 0) {
         return [
-            `the branch reflog still references ${state.branchReflogUniqueCommitCount} commit(s) that are not reachable from ${baseShort}.`,
+            `the branch reflog still references ${state.branchReflogUniqueCommitCount} commit(s) whose changes are not already represented on ${baseShort}.`,
         ];
     }
 
     return [
-        `the branch reflog does not reference any commits that are still outside ${baseShort}.`,
+        `the branch reflog does not reference any commits whose changes are still outside ${baseShort}.`,
     ];
 }
 
@@ -5741,7 +5830,7 @@ function readRemoteReasonDetail(
     const remoteName = remoteBranch?.shortName ?? 'origin branch';
 
     if (
-        (status === 'safe' || status === 'absent') &&
+        (status === 'absent' || remoteBranchStatusIsSafeForDelete(status)) &&
         remoteBranch !== null &&
         remoteBranch.branch !== branch
     ) {
@@ -5770,6 +5859,7 @@ function readRemoteReasonDetail(
         live_tip_not_on_base: `the live origin branch ${remoteName} still points to commits that are not reachable from ${baseShort}.`,
         live_tip_unverified: `the live origin branch ${remoteName} could not be verified against the local remote-tracking ref. Fetch origin before manual remote cleanup.`,
         non_origin_upstream: `the branch tracks ${remoteName}, but only origin’s default branch is treated as canonical history.`,
+        patch_equivalent_to_base: `the live origin branch ${remoteName} is not reachable from ${baseShort}, but its patch is already represented on ${baseShort}.`,
         protected_base: `the tracked origin branch ${remoteName} is the canonical default branch and is protected from deletion.`,
         safe: `the live origin branch ${remoteName} matches the local tracking ref and is already reachable from ${baseShort}.`,
         tracking_ref_not_on_base: `the live origin branch ${remoteName} is gone, but the remaining local origin-tracking ref is still not reachable from ${baseShort}.`,
@@ -10480,6 +10570,7 @@ function readRemoteDeleteSkippedReason(
         live_probe_unverified: `the live origin branch ${remoteShortName} could not be probed successfully, so remote deletion was skipped.`,
         live_tip_unverified: `the live origin branch ${remoteShortName} could not be verified against the local remote-tracking ref; remote deletion was skipped.`,
         non_origin_upstream: `the branch tracks ${remoteShortName}, but only origin branches are eligible for automatic remote deletion.`,
+        patch_equivalent_to_base: `the live origin branch ${remoteShortName} is patch-equivalent to ${baseShort}, but remote deletion was skipped by this validation path.`,
         protected_base: `the live origin branch ${remoteShortName} is the canonical default branch and is protected from deletion.`,
         tracking_ref_not_on_base: `the remaining local origin-tracking ref for ${remoteShortName} is still not reachable from ${baseShort}, so remote deletion was skipped.`,
     };
@@ -10890,7 +10981,9 @@ function readRemoteArchivePreflightSkippedReason(
         '--is-ancestor',
         liveSha,
         latestBase.liveSha,
-    ]) || refsHaveSameTree(remoteRepoPath, latestBase.liveSha, liveSha)
+    ]) ||
+        refsHaveSameTree(remoteRepoPath, latestBase.liveSha, liveSha) ||
+        refPatchEquivalentToBase(remoteRepoPath, latestBase.liveSha, liveSha)
         ? null
         : `the live origin branch ${remoteShortName} is no longer reachable from ${latestBase.shortName}; remote deletion was skipped.`;
 }
@@ -11255,7 +11348,7 @@ function renderBranchSection(
         `- Reason codes: ${renderReasonCodes(branch.reasonCodes)}`,
         `- Opinion: \`${branch.opinion.code}\` because ${branch.opinion.reason}`,
         `- Activity: ${branch.activity}`,
-        `- State: safeToDelete=${branch.state.safeToDelete}, branchTipOnBase=${branch.state.branchTipOnBase}, contentEquivalentToBase=${branch.state.contentEquivalentToBase}, mergedByHistory=${branch.state.mergedByHistory}, uniqueCommitCount=${branch.state.uniqueCommitCount}, branchReflogAvailable=${branch.state.branchReflogAvailable}, branchReflogUniqueCommitCount=${branch.state.branchReflogUniqueCommitCount}, repositoryLinkedWorktrees=${branch.state.repositoryLinkedWorktreeCount}, repositoryUnreachableCommitsAvailable=${branch.state.repositoryUnreachableCommitsAvailable}, repositoryUnreachableCommitCount=${branch.state.repositoryUnreachableCommitCount}, originBranchStatus=${branch.state.originBranchStatus}, duplicateTreeRefs=${branch.state.duplicateTreeRefs.length}, ahead=${branch.state.aheadCount}, behind=${branch.state.behindCount}, linkedWorktrees=${branch.state.linkedWorktreeCount}`,
+        `- State: safeToDelete=${branch.state.safeToDelete}, branchTipOnBase=${branch.state.branchTipOnBase}, contentEquivalentToBase=${branch.state.contentEquivalentToBase}, patchEquivalentToBase=${branch.state.patchEquivalentToBase}, mergedByHistory=${branch.state.mergedByHistory}, uniqueCommitCount=${branch.state.uniqueCommitCount}, branchReflogAvailable=${branch.state.branchReflogAvailable}, branchReflogUniqueCommitCount=${branch.state.branchReflogUniqueCommitCount}, repositoryLinkedWorktrees=${branch.state.repositoryLinkedWorktreeCount}, repositoryUnreachableCommitsAvailable=${branch.state.repositoryUnreachableCommitsAvailable}, repositoryUnreachableCommitCount=${branch.state.repositoryUnreachableCommitCount}, originBranchStatus=${branch.state.originBranchStatus}, duplicateTreeRefs=${branch.state.duplicateTreeRefs.length}, ahead=${branch.state.aheadCount}, behind=${branch.state.behindCount}, linkedWorktrees=${branch.state.linkedWorktreeCount}`,
         renderRemoteBranch(branch.remoteBranch),
     ];
 
