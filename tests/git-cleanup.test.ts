@@ -275,6 +275,49 @@ function createIgnoredOnlyWorktreeFixture(fixture: GitFixture): void {
     writeFile(path.join(ignoredDirectory, 'generated.txt'), 'x\n');
 }
 
+function createHostedPatchEquivalentBranch(fixture: GitFixture): void {
+    git(fixture.repoPath, ['checkout', '-b', 'feature'], false);
+    commitFile(
+        fixture.repoPath,
+        'feature.txt',
+        'feature\n',
+        'Create feature work',
+    );
+    git(fixture.repoPath, ['push', '-u', 'origin', 'feature'], false);
+    git(fixture.repoPath, ['checkout', 'main'], false);
+    commitFile(
+        fixture.repoPath,
+        'feature.txt',
+        'feature\n',
+        'Squash feature content',
+    );
+    commitFile(
+        fixture.repoPath,
+        'main-only.txt',
+        'main-only\n',
+        'Advance main after squash',
+    );
+    git(fixture.repoPath, ['push', 'origin', 'main'], false);
+    git(fixture.repoPath, ['fetch', 'origin'], false);
+    makeOriginAppearHosted(fixture);
+}
+
+function createResetFeatureWithNonEquivalentReflog(cwd: string): void {
+    git(cwd, ['checkout', '-b', 'feature'], false);
+    commitFile(cwd, 'feature.txt', 'feature\n', 'Create feature work');
+    git(cwd, ['checkout', 'main'], false);
+    git(cwd, ['branch', '-f', 'feature', 'main'], false);
+}
+
+function createResetFeatureWithPatchEquivalentReflog(cwd: string): void {
+    git(cwd, ['checkout', '-b', 'feature'], false);
+    commitFile(cwd, 'feature.txt', 'feature\n', 'Create feature work');
+    git(cwd, ['checkout', 'main'], false);
+    commitFile(cwd, 'feature.txt', 'feature\n', 'Squash feature content');
+    git(cwd, ['push', 'origin', 'main'], false);
+    git(cwd, ['branch', '-f', 'feature', 'main'], false);
+}
+
 function createUnmergedRemoteBranch(cwd: string, branchName: string): void {
     git(cwd, ['checkout', '-b', branchName], false);
     commitFile(
@@ -2684,6 +2727,43 @@ describe('git-cleanup CLI', () => {
             },
             gitCleanupIntegrationTimeoutMs,
         );
+
+        it(
+            'applies cleanup to a hosted branch whose commits are patch-equivalent to main',
+            () => {
+                const fixture = createGitFixture();
+
+                createHostedPatchEquivalentBranch(fixture);
+                const remoteFeatureSha = readCurrentSha(
+                    fixture.originPath,
+                    'feature',
+                );
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+
+                expect(safeDeleteBranch.state.patchEquivalentToBase).toBe(true);
+                expect(safeDeleteBranch.remoteBranch?.status).toBe(
+                    'patch_equivalent_to_base',
+                );
+
+                const applyReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                    '--apply',
+                    '--keep-archives',
+                ]);
+                const applyResult = findApplyResult(applyReport, 'feature');
+
+                expectHostedFeatureDeletedLocallyAndRemotely(
+                    fixture,
+                    applyResult,
+                    remoteFeatureSha,
+                );
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
     });
 
     describe('branch and remote classification', () => {
@@ -3950,6 +4030,36 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
+            'marks a hosted branch safe when its commits are patch-equivalent to main',
+            () => {
+                const fixture = createGitFixture();
+
+                createHostedPatchEquivalentBranch(fixture);
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+
+                expect(safeDeleteBranch.state.branchTipOnBase).toBe(false);
+                expect(safeDeleteBranch.state.contentEquivalentToBase).toBe(
+                    false,
+                );
+                expect(safeDeleteBranch.state.patchEquivalentToBase).toBe(true);
+                expect(safeDeleteBranch.remoteBranch?.status).toBe(
+                    'patch_equivalent_to_base',
+                );
+                expect(safeDeleteBranch.reasonCodes).toEqual(
+                    expect.arrayContaining([
+                        'branch_patch_equivalent_to_base',
+                        'origin_branch_patch_equivalent_to_base',
+                    ]),
+                );
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+
+        it(
             'reports duplicate-tree hints for branches with matching file content',
             () => {
                 const fixture = createGitFixture();
@@ -4395,607 +4505,654 @@ describe('git-cleanup CLI', () => {
         );
     });
 
-    describe('local worktree safety', () => {
-        it(
-            'still marks a safe branch deleteable when an unrelated repository worktree is dirty',
-            () => {
-                const fixture = createGitFixture();
+    describe('local safety', () => {
+        describe('local worktree safety', () => {
+            it(
+                'still marks a safe branch deleteable when an unrelated repository worktree is dirty',
+                () => {
+                    const fixture = createGitFixture();
 
-                createMergedFeatureBranch(fixture.repoPath, 'feature', {
-                    pushRemote: true,
-                });
-                writeFile(
-                    path.join(fixture.repoPath, 'dirty-main.txt'),
-                    'dirty\n',
-                );
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    writeFile(
+                        path.join(fixture.repoPath, 'dirty-main.txt'),
+                        'dirty\n',
+                    );
 
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
 
-                expect(
-                    safeDeleteBranch.state.repositoryWorktreeDirtyCount,
-                ).toBe(1);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
+                    expect(
+                        safeDeleteBranch.state.repositoryWorktreeDirtyCount,
+                    ).toBe(1);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+        });
 
-        it(
-            'keeps a merged branch deleteable when its reflog points at a local-only commit',
-            () => {
-                const fixture = createGitFixture();
+        describe('local branch reflog safety', () => {
+            it(
+                'keeps a merged branch for review when its reflog points at a non-equivalent local-only commit',
+                () => {
+                    const fixture = createGitFixture();
 
-                git(fixture.repoPath, ['checkout', '-b', 'feature'], false);
-                commitFile(
-                    fixture.repoPath,
-                    'feature.txt',
-                    'feature\n',
-                    'Create feature work',
-                );
-                git(fixture.repoPath, ['checkout', 'main'], false);
-                git(
-                    fixture.repoPath,
-                    ['branch', '-f', 'feature', 'main'],
-                    false,
-                );
+                    createResetFeatureWithNonEquivalentReflog(fixture.repoPath);
 
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const reviewBranch = findBranchReport(
+                        auditReport,
+                        'needsReview',
+                        'feature',
+                    );
 
-                expect(
-                    safeDeleteBranch.state.branchReflogUniqueCommitCount,
-                ).toBeGreaterThan(0);
-                expect(safeDeleteBranch.reasonCodes).not.toContain(
-                    'branch_reflog_has_unique_commits',
-                );
-                expect(
-                    findBranchReport(auditReport, 'needsReview', 'feature'),
-                ).toBe(undefined);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
+                    expect(
+                        reviewBranch?.state.branchReflogUniqueCommitCount,
+                    ).toBeGreaterThan(0);
+                    expect(reviewBranch?.reasonCodes).toContain(
+                        'branch_reflog_has_unique_commits',
+                    );
+                    expect(
+                        findBranchReport(auditReport, 'safeDelete', 'feature'),
+                    ).toBe(undefined);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
 
-        it(
-            'fails closed when a branch reflog contains a malformed entry',
-            () => {
-                const fixture = createGitFixture();
+            it(
+                'keeps a merged branch deleteable when its reflog only points at patch-equivalent commits',
+                () => {
+                    const fixture = createGitFixture();
 
-                createMergedFeatureBranch(fixture.repoPath, 'feature', {
-                    pushRemote: true,
-                });
-                writeFileSync(
-                    path.join(
-                        readGitCommonDir(fixture.repoPath),
-                        'logs',
+                    createResetFeatureWithPatchEquivalentReflog(
+                        fixture.repoPath,
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(
+                        safeDeleteBranch.state.branchReflogUniqueCommitCount,
+                    ).toBe(0);
+                    expect(safeDeleteBranch.reasonCodes).not.toContain(
+                        'branch_reflog_has_unique_commits',
+                    );
+                    expect(
+                        findBranchReport(auditReport, 'needsReview', 'feature'),
+                    ).toBe(undefined);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'fails closed when a branch reflog contains a malformed entry',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    writeFileSync(
+                        path.join(
+                            readGitCommonDir(fixture.repoPath),
+                            'logs',
+                            'refs',
+                            'heads',
+                            'feature',
+                        ),
+                        'notasha also-notasha corrupt\n',
+                        { flag: 'a' },
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const reviewBranch = findBranchReport(
+                        auditReport,
+                        'needsReview',
+                        'feature',
+                    );
+
+                    expect(reviewBranch?.reasonCodes).toContain(
+                        'branch_reflog_unavailable',
+                    );
+                    expect(
+                        findBranchReport(auditReport, 'safeDelete', 'feature'),
+                    ).toBeUndefined();
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+        });
+
+        describe('repository reflog and archive safety', () => {
+            it(
+                'still marks a safe branch deleteable when unrelated repository-wide reflogs retain non-base history',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    createMovedTagReflogHistoryNotOnBase(
+                        fixture.repoPath,
+                        'retained-history',
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(
+                        safeDeleteBranch.state
+                            .repositoryReflogUniqueCommitCount,
+                    ).toBeGreaterThan(0);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'still marks a safe branch deleteable when an unrelated linked worktree HEAD reflog retains non-base history',
+                () => {
+                    const fixture = createGitFixture();
+                    const linkedWorktreePath = path.join(
+                        fixture.tempPath,
+                        'topic-worktree',
+                    );
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    createAttachedLinkedWorktreeWithDetachedHeadHistory(
+                        fixture,
+                        'topic',
+                        linkedWorktreePath,
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(
+                        safeDeleteBranch.state
+                            .repositoryReflogUniqueCommitCount,
+                    ).toBeGreaterThan(0);
+                    expect(
+                        safeDeleteBranch.state.repositoryLinkedWorktreePaths,
+                    ).toContain(realpathSync(linkedWorktreePath));
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'still marks a safe branch deleteable when an unrelated dirty linked worktree path contains a newline',
+                () => {
+                    const fixture = createGitFixture();
+                    const cleanSiblingPath = path.join(
+                        fixture.tempPath,
+                        'newline-worktree',
+                    );
+                    const newlineWorktreePath = `${cleanSiblingPath}\nspoof`;
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    git(
+                        fixture.repoPath,
+                        ['branch', 'clean-topic', 'main'],
+                        false,
+                    );
+                    git(
+                        fixture.repoPath,
+                        ['branch', 'dirty-topic', 'main'],
+                        false,
+                    );
+                    git(
+                        fixture.repoPath,
+                        ['worktree', 'add', cleanSiblingPath, 'clean-topic'],
+                        false,
+                    );
+                    git(
+                        fixture.repoPath,
+                        ['worktree', 'add', newlineWorktreePath, 'dirty-topic'],
+                        false,
+                    );
+                    writeFile(
+                        path.join(newlineWorktreePath, 'untracked.txt'),
+                        'dirty\n',
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(
+                        safeDeleteBranch.state.repositoryWorktreeDirtyPaths.some(
+                            (dirtyPath) => dirtyPath.includes('\nspoof'),
+                        ),
+                    ).toBe(true);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'still marks a safe branch deleteable when an unrelated worktree-private ref points outside main',
+                () => {
+                    const fixture = createGitFixture();
+                    const linkedWorktreePath = path.join(
+                        fixture.tempPath,
+                        'private-ref-worktree',
+                    );
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    git(fixture.repoPath, ['branch', 'topic', 'main'], false);
+                    git(
+                        fixture.repoPath,
+                        ['worktree', 'add', linkedWorktreePath, 'topic'],
+                        false,
+                    );
+                    git(linkedWorktreePath, ['checkout', '--detach'], false);
+                    commitFile(
+                        linkedWorktreePath,
+                        'private-ref.txt',
+                        'private-ref\n',
+                        'Create private ref work',
+                    );
+                    git(
+                        linkedWorktreePath,
+                        ['update-ref', 'refs/worktree/private-ref', 'HEAD'],
+                        false,
+                    );
+                    git(linkedWorktreePath, ['checkout', 'topic'], false);
+                    rmSync(
+                        path.join(
+                            readAbsoluteGitDir(linkedWorktreePath),
+                            'logs',
+                            'HEAD',
+                        ),
+                        { force: true },
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(
+                        safeDeleteBranch.state.repositoryHiddenRefs.some(
+                            (ref) => ref.endsWith('/refs/worktree/private-ref'),
+                        ),
+                    ).toBe(true);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'still marks a safe branch deleteable when an unrelated worktree-private ref reflog retains history outside main',
+                () => {
+                    const fixture = createGitFixture();
+                    const linkedWorktreePath = path.join(
+                        fixture.tempPath,
+                        'private-reflog-worktree',
+                    );
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    git(fixture.repoPath, ['branch', 'topic', 'main'], false);
+                    git(
+                        fixture.repoPath,
+                        ['worktree', 'add', linkedWorktreePath, 'topic'],
+                        false,
+                    );
+                    git(linkedWorktreePath, ['checkout', '--detach'], false);
+                    commitFile(
+                        linkedWorktreePath,
+                        'private-reflog.txt',
+                        'private-reflog\n',
+                        'Create private reflog work',
+                    );
+                    git(
+                        linkedWorktreePath,
+                        [
+                            'update-ref',
+                            '--create-reflog',
+                            'refs/worktree/private-reflog',
+                            'HEAD',
+                        ],
+                        false,
+                    );
+                    git(
+                        linkedWorktreePath,
+                        ['update-ref', 'refs/worktree/private-reflog', 'topic'],
+                        false,
+                    );
+                    git(linkedWorktreePath, ['checkout', 'topic'], false);
+                    rmSync(
+                        path.join(
+                            readAbsoluteGitDir(linkedWorktreePath),
+                            'logs',
+                            'HEAD',
+                        ),
+                        { force: true },
+                    );
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(
+                        safeDeleteBranch.state
+                            .repositoryReflogUniqueCommitCount,
+                    ).toBeGreaterThan(0);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'still marks a safe branch deleteable when another live off-base branch has no reflog',
+                () => {
+                    const fixture = createGitFixture();
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    git(fixture.repoPath, ['checkout', '-b', 'topic'], false);
+                    commitFile(
+                        fixture.repoPath,
+                        'topic.txt',
+                        'topic\n',
+                        'Create topic work',
+                    );
+                    git(fixture.repoPath, ['checkout', 'main'], false);
+                    removeRefReflog(fixture.repoPath, 'refs', 'heads', 'topic');
+
+                    const auditReport = runGitCleanupJson(fixture.repoPath, [
+                        'git-cleanup',
+                    ]);
+                    const safeDeleteBranch =
+                        expectSafeDeleteBranch(auditReport);
+
+                    expect(
+                        safeDeleteBranch.state.repositoryHiddenRefs,
+                    ).toContain('refs/heads/topic');
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'fails closed when archived local branch validation loses the preserving reflog',
+                () => {
+                    const fixture = createGitFixture();
+                    const archivedBranchName =
+                        'slop-refinery/archive/local/feature/manual-check';
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                        pushRemote: true,
+                    });
+                    git(
+                        fixture.repoPath,
+                        ['branch', '-m', 'feature', archivedBranchName],
+                        false,
+                    );
+                    removeRefReflog(
+                        fixture.repoPath,
                         'refs',
                         'heads',
+                        ...archivedBranchName.split('/'),
+                    );
+
+                    const archivedBranchValidation =
+                        validateArchivedBranchForTesting(
+                            fixture.repoPath,
+                            'feature',
+                            archivedBranchName,
+                            readCurrentSha(
+                                fixture.repoPath,
+                                archivedBranchName,
+                            ),
+                        );
+
+                    expect(archivedBranchValidation.archived).toBe(false);
+                    expect(
+                        archivedBranchValidation.errors.some((error) =>
+                            error.includes('reflog'),
+                        ),
+                    ).toBe(true);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'fails closed when archived local branch validation sees a symbolic archive ref',
+                () => {
+                    const fixture = createGitFixture();
+                    const archivedBranchName =
+                        'slop-refinery/archive/local/feature/manual-symbolic-check';
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    const expectedBranchSha = readCurrentSha(
+                        fixture.repoPath,
                         'feature',
-                    ),
-                    'notasha also-notasha corrupt\n',
-                    { flag: 'a' },
-                );
+                    );
+                    git(fixture.repoPath, ['branch', '-D', 'feature'], false);
+                    git(
+                        fixture.repoPath,
+                        [
+                            'symbolic-ref',
+                            `refs/heads/${archivedBranchName}`,
+                            'refs/heads/main',
+                        ],
+                        false,
+                    );
 
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                    const archivedBranchValidation =
+                        validateArchivedBranchForTesting(
+                            fixture.repoPath,
+                            'feature',
+                            archivedBranchName,
+                            expectedBranchSha,
+                        );
 
-                expect(reviewBranch?.reasonCodes).toContain(
-                    'branch_reflog_unavailable',
-                );
-                expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
-                ).toBeUndefined();
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
+                    expect(archivedBranchValidation.archived).toBe(false);
+                    expect(
+                        archivedBranchValidation.errors.some((error) =>
+                            error.includes('symbolic'),
+                        ),
+                    ).toBe(true);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
 
-        it(
-            'still marks a safe branch deleteable when unrelated repository-wide reflogs retain non-base history',
-            () => {
-                const fixture = createGitFixture();
+            it(
+                'fails closed when archived local branch validation sees a symbolic original ref',
+                () => {
+                    const fixture = createGitFixture();
+                    const archivedBranchName =
+                        'slop-refinery/archive/local/feature/manual-original-symbolic-check';
 
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                createMovedTagReflogHistoryNotOnBase(
-                    fixture.repoPath,
-                    'retained-history',
-                );
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    const expectedBranchSha = readCurrentSha(
+                        fixture.repoPath,
+                        'feature',
+                    );
+                    git(
+                        fixture.repoPath,
+                        ['branch', '-m', 'feature', archivedBranchName],
+                        false,
+                    );
+                    git(
+                        fixture.repoPath,
+                        [
+                            'symbolic-ref',
+                            'refs/heads/feature',
+                            'refs/heads/missing-target',
+                        ],
+                        false,
+                    );
 
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+                    const archivedBranchValidation =
+                        validateArchivedBranchForTesting(
+                            fixture.repoPath,
+                            'feature',
+                            archivedBranchName,
+                            expectedBranchSha,
+                        );
 
-                expect(
-                    safeDeleteBranch.state.repositoryReflogUniqueCommitCount,
-                ).toBeGreaterThan(0);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
+                    expect(archivedBranchValidation.archived).toBe(false);
+                    expect(
+                        archivedBranchValidation.errors.some((error) =>
+                            error.includes('symbolic'),
+                        ),
+                    ).toBe(true);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
 
-        it(
-            'still marks a safe branch deleteable when an unrelated linked worktree HEAD reflog retains non-base history',
-            () => {
-                const fixture = createGitFixture();
-                const linkedWorktreePath = path.join(
-                    fixture.tempPath,
-                    'topic-worktree',
-                );
+            it(
+                'restores the original local branch name from the current archived tip',
+                () => {
+                    const fixture = createGitFixture();
+                    const archivedBranchName =
+                        'slop-refinery/archive/local/feature/manual-restore';
 
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                createAttachedLinkedWorktreeWithDetachedHeadHistory(
-                    fixture,
-                    'topic',
-                    linkedWorktreePath,
-                );
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    git(
+                        fixture.repoPath,
+                        ['branch', '-m', 'feature', archivedBranchName],
+                        false,
+                    );
 
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
-
-                expect(
-                    safeDeleteBranch.state.repositoryReflogUniqueCommitCount,
-                ).toBeGreaterThan(0);
-                expect(
-                    safeDeleteBranch.state.repositoryLinkedWorktreePaths,
-                ).toContain(realpathSync(linkedWorktreePath));
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'still marks a safe branch deleteable when an unrelated dirty linked worktree path contains a newline',
-            () => {
-                const fixture = createGitFixture();
-                const cleanSiblingPath = path.join(
-                    fixture.tempPath,
-                    'newline-worktree',
-                );
-                const newlineWorktreePath = `${cleanSiblingPath}\nspoof`;
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                git(fixture.repoPath, ['branch', 'clean-topic', 'main'], false);
-                git(fixture.repoPath, ['branch', 'dirty-topic', 'main'], false);
-                git(
-                    fixture.repoPath,
-                    ['worktree', 'add', cleanSiblingPath, 'clean-topic'],
-                    false,
-                );
-                git(
-                    fixture.repoPath,
-                    ['worktree', 'add', newlineWorktreePath, 'dirty-topic'],
-                    false,
-                );
-                writeFile(
-                    path.join(newlineWorktreePath, 'untracked.txt'),
-                    'dirty\n',
-                );
-
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
-
-                expect(
-                    safeDeleteBranch.state.repositoryWorktreeDirtyPaths.some(
-                        (dirtyPath) => dirtyPath.includes('\nspoof'),
-                    ),
-                ).toBe(true);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'still marks a safe branch deleteable when an unrelated worktree-private ref points outside main',
-            () => {
-                const fixture = createGitFixture();
-                const linkedWorktreePath = path.join(
-                    fixture.tempPath,
-                    'private-ref-worktree',
-                );
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                git(fixture.repoPath, ['branch', 'topic', 'main'], false);
-                git(
-                    fixture.repoPath,
-                    ['worktree', 'add', linkedWorktreePath, 'topic'],
-                    false,
-                );
-                git(linkedWorktreePath, ['checkout', '--detach'], false);
-                commitFile(
-                    linkedWorktreePath,
-                    'private-ref.txt',
-                    'private-ref\n',
-                    'Create private ref work',
-                );
-                git(
-                    linkedWorktreePath,
-                    ['update-ref', 'refs/worktree/private-ref', 'HEAD'],
-                    false,
-                );
-                git(linkedWorktreePath, ['checkout', 'topic'], false);
-                rmSync(
-                    path.join(
-                        readAbsoluteGitDir(linkedWorktreePath),
-                        'logs',
-                        'HEAD',
-                    ),
-                    { force: true },
-                );
-
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
-
-                expect(
-                    safeDeleteBranch.state.repositoryHiddenRefs.some((ref) =>
-                        ref.endsWith('/refs/worktree/private-ref'),
-                    ),
-                ).toBe(true);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'still marks a safe branch deleteable when an unrelated worktree-private ref reflog retains history outside main',
-            () => {
-                const fixture = createGitFixture();
-                const linkedWorktreePath = path.join(
-                    fixture.tempPath,
-                    'private-reflog-worktree',
-                );
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                git(fixture.repoPath, ['branch', 'topic', 'main'], false);
-                git(
-                    fixture.repoPath,
-                    ['worktree', 'add', linkedWorktreePath, 'topic'],
-                    false,
-                );
-                git(linkedWorktreePath, ['checkout', '--detach'], false);
-                commitFile(
-                    linkedWorktreePath,
-                    'private-reflog.txt',
-                    'private-reflog\n',
-                    'Create private reflog work',
-                );
-                git(
-                    linkedWorktreePath,
-                    [
-                        'update-ref',
-                        '--create-reflog',
-                        'refs/worktree/private-reflog',
-                        'HEAD',
-                    ],
-                    false,
-                );
-                git(
-                    linkedWorktreePath,
-                    ['update-ref', 'refs/worktree/private-reflog', 'topic'],
-                    false,
-                );
-                git(linkedWorktreePath, ['checkout', 'topic'], false);
-                rmSync(
-                    path.join(
-                        readAbsoluteGitDir(linkedWorktreePath),
-                        'logs',
-                        'HEAD',
-                    ),
-                    { force: true },
-                );
-
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
-
-                expect(
-                    safeDeleteBranch.state.repositoryReflogUniqueCommitCount,
-                ).toBeGreaterThan(0);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'still marks a safe branch deleteable when another live off-base branch has no reflog',
-            () => {
-                const fixture = createGitFixture();
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                git(fixture.repoPath, ['checkout', '-b', 'topic'], false);
-                commitFile(
-                    fixture.repoPath,
-                    'topic.txt',
-                    'topic\n',
-                    'Create topic work',
-                );
-                git(fixture.repoPath, ['checkout', 'main'], false);
-                removeRefReflog(fixture.repoPath, 'refs', 'heads', 'topic');
-
-                const auditReport = runGitCleanupJson(fixture.repoPath, [
-                    'git-cleanup',
-                ]);
-                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
-
-                expect(safeDeleteBranch.state.repositoryHiddenRefs).toContain(
-                    'refs/heads/topic',
-                );
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'fails closed when archived local branch validation loses the preserving reflog',
-            () => {
-                const fixture = createGitFixture();
-                const archivedBranchName =
-                    'slop-refinery/archive/local/feature/manual-check';
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature', {
-                    pushRemote: true,
-                });
-                git(
-                    fixture.repoPath,
-                    ['branch', '-m', 'feature', archivedBranchName],
-                    false,
-                );
-                removeRefReflog(
-                    fixture.repoPath,
-                    'refs',
-                    'heads',
-                    ...archivedBranchName.split('/'),
-                );
-
-                const archivedBranchValidation =
-                    validateArchivedBranchForTesting(
+                    const restoreResult = restoreArchivedBranchForTesting(
                         fixture.repoPath,
                         'feature',
                         archivedBranchName,
+                    );
+
+                    expect(restoreResult.restored).toBe(true);
+                    expect(restoreResult.errors).toEqual([]);
+                    expect(
+                        git(fixture.repoPath, ['branch', '--list', 'feature']),
+                    ).toContain('feature');
+                    expect(
+                        git(fixture.repoPath, [
+                            'branch',
+                            '--list',
+                            archivedBranchName,
+                        ]),
+                    ).toBe('');
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'restores the original local branch name from the current archived tip if the archive ref moved',
+                () => {
+                    const fixture = createGitFixture();
+                    const archivedBranchName =
+                        'slop-refinery/archive/local/feature/manual-restore-moved';
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    createHiddenLocalRefNotOnBase(
+                        fixture.repoPath,
+                        'refs/original/local-restore-moved',
+                    );
+                    const movedArchiveSha = readCurrentSha(
+                        fixture.repoPath,
+                        'refs/original/local-restore-moved',
+                    );
+
+                    git(
+                        fixture.repoPath,
+                        ['branch', '-m', 'feature', archivedBranchName],
+                        false,
+                    );
+                    git(
+                        fixture.repoPath,
+                        ['branch', '-f', archivedBranchName, movedArchiveSha],
+                        false,
+                    );
+
+                    const restoreResult = restoreArchivedBranchForTesting(
+                        fixture.repoPath,
+                        'feature',
+                        archivedBranchName,
+                    );
+
+                    expect(restoreResult.restored).toBe(true);
+                    expect(restoreResult.errors).toEqual([]);
+                    expect(readCurrentSha(fixture.repoPath, 'feature')).toBe(
+                        movedArchiveSha,
+                    );
+                    expect(
+                        git(fixture.repoPath, [
+                            'branch',
+                            '--list',
+                            archivedBranchName,
+                        ]),
+                    ).toBe('');
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+
+            it(
+                'restores a pinned branch at the expected SHA and preserves a moved archive ref',
+                () => {
+                    const fixture = createGitFixture();
+                    const archivedBranchName =
+                        'slop-refinery/archive/local/feature/manual-restore-pinned-moved';
+
+                    createMergedFeatureBranch(fixture.repoPath, 'feature');
+                    const originalBranchSha = readCurrentSha(
+                        fixture.repoPath,
+                        'feature',
+                    );
+                    createHiddenLocalRefNotOnBase(
+                        fixture.repoPath,
+                        'refs/original/local-restore-pinned-moved',
+                    );
+                    const movedArchiveSha = readCurrentSha(
+                        fixture.repoPath,
+                        'refs/original/local-restore-pinned-moved',
+                    );
+
+                    git(
+                        fixture.repoPath,
+                        ['branch', '-m', 'feature', archivedBranchName],
+                        false,
+                    );
+                    git(
+                        fixture.repoPath,
+                        ['branch', '-f', archivedBranchName, movedArchiveSha],
+                        false,
+                    );
+
+                    const restoreResult = restoreArchivedBranchForTesting(
+                        fixture.repoPath,
+                        'feature',
+                        archivedBranchName,
+                        originalBranchSha,
+                    );
+
+                    expect(restoreResult.restored).toBe(true);
+                    expect(restoreResult.preservedArchiveRef).toBe(true);
+                    expect(restoreResult.errors).toEqual([]);
+                    expect(readCurrentSha(fixture.repoPath, 'feature')).toBe(
+                        originalBranchSha,
+                    );
+                    expect(
                         readCurrentSha(fixture.repoPath, archivedBranchName),
-                    );
-
-                expect(archivedBranchValidation.archived).toBe(false);
-                expect(
-                    archivedBranchValidation.errors.some((error) =>
-                        error.includes('reflog'),
-                    ),
-                ).toBe(true);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'fails closed when archived local branch validation sees a symbolic archive ref',
-            () => {
-                const fixture = createGitFixture();
-                const archivedBranchName =
-                    'slop-refinery/archive/local/feature/manual-symbolic-check';
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                const expectedBranchSha = readCurrentSha(
-                    fixture.repoPath,
-                    'feature',
-                );
-                git(fixture.repoPath, ['branch', '-D', 'feature'], false);
-                git(
-                    fixture.repoPath,
-                    [
-                        'symbolic-ref',
-                        `refs/heads/${archivedBranchName}`,
-                        'refs/heads/main',
-                    ],
-                    false,
-                );
-
-                const archivedBranchValidation =
-                    validateArchivedBranchForTesting(
-                        fixture.repoPath,
-                        'feature',
-                        archivedBranchName,
-                        expectedBranchSha,
-                    );
-
-                expect(archivedBranchValidation.archived).toBe(false);
-                expect(
-                    archivedBranchValidation.errors.some((error) =>
-                        error.includes('symbolic'),
-                    ),
-                ).toBe(true);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'fails closed when archived local branch validation sees a symbolic original ref',
-            () => {
-                const fixture = createGitFixture();
-                const archivedBranchName =
-                    'slop-refinery/archive/local/feature/manual-original-symbolic-check';
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                const expectedBranchSha = readCurrentSha(
-                    fixture.repoPath,
-                    'feature',
-                );
-                git(
-                    fixture.repoPath,
-                    ['branch', '-m', 'feature', archivedBranchName],
-                    false,
-                );
-                git(
-                    fixture.repoPath,
-                    [
-                        'symbolic-ref',
-                        'refs/heads/feature',
-                        'refs/heads/missing-target',
-                    ],
-                    false,
-                );
-
-                const archivedBranchValidation =
-                    validateArchivedBranchForTesting(
-                        fixture.repoPath,
-                        'feature',
-                        archivedBranchName,
-                        expectedBranchSha,
-                    );
-
-                expect(archivedBranchValidation.archived).toBe(false);
-                expect(
-                    archivedBranchValidation.errors.some((error) =>
-                        error.includes('symbolic'),
-                    ),
-                ).toBe(true);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'restores the original local branch name from the current archived tip',
-            () => {
-                const fixture = createGitFixture();
-                const archivedBranchName =
-                    'slop-refinery/archive/local/feature/manual-restore';
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                git(
-                    fixture.repoPath,
-                    ['branch', '-m', 'feature', archivedBranchName],
-                    false,
-                );
-
-                const restoreResult = restoreArchivedBranchForTesting(
-                    fixture.repoPath,
-                    'feature',
-                    archivedBranchName,
-                );
-
-                expect(restoreResult.restored).toBe(true);
-                expect(restoreResult.errors).toEqual([]);
-                expect(
-                    git(fixture.repoPath, ['branch', '--list', 'feature']),
-                ).toContain('feature');
-                expect(
-                    git(fixture.repoPath, [
-                        'branch',
-                        '--list',
-                        archivedBranchName,
-                    ]),
-                ).toBe('');
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'restores the original local branch name from the current archived tip if the archive ref moved',
-            () => {
-                const fixture = createGitFixture();
-                const archivedBranchName =
-                    'slop-refinery/archive/local/feature/manual-restore-moved';
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                createHiddenLocalRefNotOnBase(
-                    fixture.repoPath,
-                    'refs/original/local-restore-moved',
-                );
-                const movedArchiveSha = readCurrentSha(
-                    fixture.repoPath,
-                    'refs/original/local-restore-moved',
-                );
-
-                git(
-                    fixture.repoPath,
-                    ['branch', '-m', 'feature', archivedBranchName],
-                    false,
-                );
-                git(
-                    fixture.repoPath,
-                    ['branch', '-f', archivedBranchName, movedArchiveSha],
-                    false,
-                );
-
-                const restoreResult = restoreArchivedBranchForTesting(
-                    fixture.repoPath,
-                    'feature',
-                    archivedBranchName,
-                );
-
-                expect(restoreResult.restored).toBe(true);
-                expect(restoreResult.errors).toEqual([]);
-                expect(readCurrentSha(fixture.repoPath, 'feature')).toBe(
-                    movedArchiveSha,
-                );
-                expect(
-                    git(fixture.repoPath, [
-                        'branch',
-                        '--list',
-                        archivedBranchName,
-                    ]),
-                ).toBe('');
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
-
-        it(
-            'restores a pinned branch at the expected SHA and preserves a moved archive ref',
-            () => {
-                const fixture = createGitFixture();
-                const archivedBranchName =
-                    'slop-refinery/archive/local/feature/manual-restore-pinned-moved';
-
-                createMergedFeatureBranch(fixture.repoPath, 'feature');
-                const originalBranchSha = readCurrentSha(
-                    fixture.repoPath,
-                    'feature',
-                );
-                createHiddenLocalRefNotOnBase(
-                    fixture.repoPath,
-                    'refs/original/local-restore-pinned-moved',
-                );
-                const movedArchiveSha = readCurrentSha(
-                    fixture.repoPath,
-                    'refs/original/local-restore-pinned-moved',
-                );
-
-                git(
-                    fixture.repoPath,
-                    ['branch', '-m', 'feature', archivedBranchName],
-                    false,
-                );
-                git(
-                    fixture.repoPath,
-                    ['branch', '-f', archivedBranchName, movedArchiveSha],
-                    false,
-                );
-
-                const restoreResult = restoreArchivedBranchForTesting(
-                    fixture.repoPath,
-                    'feature',
-                    archivedBranchName,
-                    originalBranchSha,
-                );
-
-                expect(restoreResult.restored).toBe(true);
-                expect(restoreResult.preservedArchiveRef).toBe(true);
-                expect(restoreResult.errors).toEqual([]);
-                expect(readCurrentSha(fixture.repoPath, 'feature')).toBe(
-                    originalBranchSha,
-                );
-                expect(
-                    readCurrentSha(fixture.repoPath, archivedBranchName),
-                ).toBe(movedArchiveSha);
-            },
-            gitCleanupIntegrationTimeoutMs,
-        );
+                    ).toBe(movedArchiveSha);
+                },
+                gitCleanupIntegrationTimeoutMs,
+            );
+        });
     });
 
     describe('practical cleanup proof reductions', () => {
@@ -5033,6 +5190,41 @@ describe('git-cleanup CLI', () => {
                     pushRemote: true,
                 });
                 removeRefReflog(fixture.repoPath, 'refs', 'heads', 'feature');
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+
+                expect(safeDeleteBranch.state.branchReflogAvailable).toBe(true);
+                expect(
+                    safeDeleteBranch.state.branchReflogUniqueCommitCount,
+                ).toBe(0);
+                expect(safeDeleteBranch.reasonCodes).not.toContain(
+                    'branch_reflog_unavailable',
+                );
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+
+        it(
+            'keeps a merged branch deleteable when its branch reflog is empty',
+            () => {
+                const fixture = createGitFixture();
+
+                createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                    pushRemote: true,
+                });
+                writeFileSync(
+                    path.join(
+                        readGitCommonDir(fixture.repoPath),
+                        'logs',
+                        'refs',
+                        'heads',
+                        'feature',
+                    ),
+                    '',
+                );
 
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
