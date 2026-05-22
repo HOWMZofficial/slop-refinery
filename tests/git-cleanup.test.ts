@@ -258,6 +258,23 @@ function createMergedFeatureBranch(
     git(cwd, ['push', 'origin', 'main'], false);
 }
 
+function createIgnoredOnlyWorktreeFixture(fixture: GitFixture): void {
+    const ignoredDirectory = path.join(fixture.repoPath, 'ignored');
+
+    commitFile(
+        fixture.repoPath,
+        '.gitignore',
+        'ignored/\n',
+        'Ignore generated fixture output',
+    );
+    git(fixture.repoPath, ['push', 'origin', 'main'], false);
+    createMergedFeatureBranch(fixture.repoPath, 'feature', {
+        pushRemote: true,
+    });
+    mkdirSync(ignoredDirectory, { recursive: true });
+    writeFile(path.join(ignoredDirectory, 'generated.txt'), 'x\n');
+}
+
 function createUnmergedRemoteBranch(cwd: string, branchName: string): void {
     git(cwd, ['checkout', '-b', branchName], false);
     commitFile(
@@ -2547,6 +2564,7 @@ describe('git-cleanup CLI', () => {
                     '## Action Summary',
                     '- Delete candidates: `feature`.',
                     '- To delete them: `slop-refinery git-cleanup --apply`.',
+                    '- Protected branches: `main`.',
                     '- Manual review: `review`.',
                     '- Detached worktrees: none.',
                 ].join('\n');
@@ -2577,6 +2595,7 @@ describe('git-cleanup CLI', () => {
                     '## Action Summary',
                     '- Delete candidates: `feature`.',
                     '- To delete them: `npm run git-cleanup -- --apply`.',
+                    '- Protected branches: `main`.',
                     '- Manual review: none.',
                     '- Detached worktrees: none.',
                 ].join('\n');
@@ -2607,6 +2626,7 @@ describe('git-cleanup CLI', () => {
                     '- Applied deletes: `feature` (local deleted, origin deleted).',
                     '- Archive pruning: 1 pruned, 0 kept.',
                     '- Delete candidates: none.',
+                    '- Protected branches: `main`.',
                     '- Manual review: `review`.',
                     '- Detached worktrees: none.',
                 ].join('\n');
@@ -3880,6 +3900,90 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
+            'marks a hosted branch safe when its tip is content-equivalent to main',
+            () => {
+                const fixture = createGitFixture();
+
+                git(fixture.repoPath, ['checkout', '-b', 'feature'], false);
+                commitFile(
+                    fixture.repoPath,
+                    'feature.txt',
+                    'feature\n',
+                    'Create feature work',
+                );
+                git(
+                    fixture.repoPath,
+                    ['push', '-u', 'origin', 'feature'],
+                    false,
+                );
+                git(fixture.repoPath, ['checkout', 'main'], false);
+                commitFile(
+                    fixture.repoPath,
+                    'feature.txt',
+                    'feature\n',
+                    'Squash feature content',
+                );
+                git(fixture.repoPath, ['push', 'origin', 'main'], false);
+                git(fixture.repoPath, ['fetch', 'origin'], false);
+                makeOriginAppearHosted(fixture);
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+
+                expect(safeDeleteBranch.state.branchTipOnBase).toBe(false);
+                expect(safeDeleteBranch.state.contentEquivalentToBase).toBe(
+                    true,
+                );
+                expect(safeDeleteBranch.remoteBranch?.status).toBe(
+                    'content_equivalent_to_base',
+                );
+                expect(safeDeleteBranch.reasonCodes).toEqual(
+                    expect.arrayContaining([
+                        'branch_content_equivalent_to_base',
+                        'origin_branch_content_equivalent_to_base',
+                    ]),
+                );
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+
+        it(
+            'reports duplicate-tree hints for branches with matching file content',
+            () => {
+                const fixture = createGitFixture();
+
+                git(fixture.repoPath, ['checkout', '-b', 'feature'], false);
+                commitFile(
+                    fixture.repoPath,
+                    'feature.txt',
+                    'feature\n',
+                    'Create feature work',
+                );
+                git(fixture.repoPath, ['branch', 'duplicate-feature'], false);
+                git(fixture.repoPath, ['checkout', 'main'], false);
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const reviewBranch = findBranchReport(
+                    auditReport,
+                    'needsReview',
+                    'feature',
+                );
+
+                expect(reviewBranch?.state.duplicateTreeRefs).toContain(
+                    'duplicate-feature',
+                );
+                expect(reviewBranch?.reasonDetails.join('\n')).toContain(
+                    'duplicate file content',
+                );
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+
+        it(
             'still marks a safe branch deleteable when unrelated unreachable objects exist',
             () => {
                 const fixture = createGitFixture();
@@ -4027,7 +4131,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'keeps protected main in review when its origin tracking proof is incomplete',
+            'reports protected main outside manual review when its origin tracking proof is incomplete',
             () => {
                 const fixture = createGitFixture();
 
@@ -4039,17 +4143,15 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'main',
-                );
+                const [protectedBranch] = auditReport.branches.protected;
 
-                expect(reviewBranch?.remoteBranch?.status).toBe(
+                expect(protectedBranch?.name).toBe('main');
+                expect(protectedBranch?.classification).toBe('protected_base');
+                expect(protectedBranch?.remoteBranch?.status).toBe(
                     'history_unverified',
                 );
                 expect(
-                    auditReport.branches.skipped.some(
+                    auditReport.branches.needsReview.some(
                         (branch) => branch.name === 'main',
                     ),
                 ).toBe(false);
@@ -4058,7 +4160,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'keeps protected main in review when it is checked out in a dirty primary worktree',
+            'reports protected main outside manual review when it is checked out in a dirty primary worktree',
             () => {
                 const fixture = createGitFixture();
 
@@ -4070,17 +4172,15 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'main',
-                );
+                const [protectedBranch] = auditReport.branches.protected;
 
-                expect(reviewBranch?.reasonCodes).toContain(
+                expect(protectedBranch?.name).toBe('main');
+                expect(protectedBranch?.classification).toBe('protected_base');
+                expect(protectedBranch?.reasonCodes).toContain(
                     'linked_worktree_dirty',
                 );
                 expect(
-                    auditReport.branches.skipped.some(
+                    auditReport.branches.needsReview.some(
                         (branch) => branch.name === 'main',
                     ),
                 ).toBe(false);
@@ -4322,7 +4422,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'fails closed when a branch reflog still points at a local-only commit',
+            'keeps a merged branch deleteable when its reflog points at a local-only commit',
             () => {
                 const fixture = createGitFixture();
 
@@ -4343,17 +4443,16 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'feature',
-                );
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
 
-                expect(reviewBranch?.reasonCodes).toContain(
+                expect(
+                    safeDeleteBranch.state.branchReflogUniqueCommitCount,
+                ).toBeGreaterThan(0);
+                expect(safeDeleteBranch.reasonCodes).not.toContain(
                     'branch_reflog_has_unique_commits',
                 );
                 expect(
-                    findBranchReport(auditReport, 'safeDelete', 'feature'),
+                    findBranchReport(auditReport, 'needsReview', 'feature'),
                 ).toBe(undefined);
             },
             gitCleanupIntegrationTimeoutMs,
@@ -4894,6 +4993,59 @@ describe('git-cleanup CLI', () => {
                 expect(
                     readCurrentSha(fixture.repoPath, archivedBranchName),
                 ).toBe(movedArchiveSha);
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+    });
+
+    describe('practical cleanup proof reductions', () => {
+        it(
+            'does not treat ignored-only worktree files as dirty cleanup blockers',
+            () => {
+                const fixture = createGitFixture();
+
+                createIgnoredOnlyWorktreeFixture(fixture);
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+                const [protectedBranch] = auditReport.branches.protected;
+
+                expect(
+                    safeDeleteBranch.state.repositoryWorktreeDirtyCount,
+                ).toBe(0);
+                expect(
+                    protectedBranch?.reasonCodes.includes(
+                        'linked_worktree_dirty',
+                    ),
+                ).toBe(false);
+            },
+            gitCleanupIntegrationTimeoutMs,
+        );
+
+        it(
+            'keeps a merged branch deleteable when its branch reflog is missing',
+            () => {
+                const fixture = createGitFixture();
+
+                createMergedFeatureBranch(fixture.repoPath, 'feature', {
+                    pushRemote: true,
+                });
+                removeRefReflog(fixture.repoPath, 'refs', 'heads', 'feature');
+
+                const auditReport = runGitCleanupJson(fixture.repoPath, [
+                    'git-cleanup',
+                ]);
+                const safeDeleteBranch = expectSafeDeleteBranch(auditReport);
+
+                expect(safeDeleteBranch.state.branchReflogAvailable).toBe(true);
+                expect(
+                    safeDeleteBranch.state.branchReflogUniqueCommitCount,
+                ).toBe(0);
+                expect(safeDeleteBranch.reasonCodes).not.toContain(
+                    'branch_reflog_unavailable',
+                );
             },
             gitCleanupIntegrationTimeoutMs,
         );
@@ -6093,7 +6245,7 @@ describe('git-cleanup CLI', () => {
         );
 
         it(
-            'reports protected main for review when local origin has hidden non-base history',
+            'reports protected main outside manual review when local origin has hidden non-base history',
             () => {
                 const fixture = createGitFixture();
 
@@ -6105,17 +6257,15 @@ describe('git-cleanup CLI', () => {
                 const auditReport = runGitCleanupJson(fixture.repoPath, [
                     'git-cleanup',
                 ]);
-                const reviewBranch = findBranchReport(
-                    auditReport,
-                    'needsReview',
-                    'main',
-                );
+                const [protectedBranch] = auditReport.branches.protected;
 
-                expect(reviewBranch?.reasonCodes).toContain(
+                expect(protectedBranch?.name).toBe('main');
+                expect(protectedBranch?.classification).toBe('protected_base');
+                expect(protectedBranch?.reasonCodes).toContain(
                     'origin_branch_history_not_on_base',
                 );
                 expect(
-                    auditReport.branches.skipped.some(
+                    auditReport.branches.needsReview.some(
                         (branch) => branch.name === 'main',
                     ),
                 ).toBe(false);
