@@ -181,7 +181,11 @@ function getRulesetUsage(): string {
 function getGitCleanupApplyCommand(): string {
     return process.env.npm_lifecycle_event === 'git-cleanup'
         ? 'npm run git-cleanup -- --apply'
-        : 'slop-refinery git-cleanup --apply';
+        : 'npx slop-refinery git-cleanup --apply';
+}
+
+function shouldShowGitCleanupProgress(options: { json: boolean }): boolean {
+    return !options.json && process.stderr.isTTY === true;
 }
 
 function parseRepoSlug(repoSlug: string): {
@@ -294,6 +298,11 @@ async function run(): Promise<void> {
             ...parseGitCleanupArgs(resourceArgs),
             applyCommand: getGitCleanupApplyCommand(),
         };
+
+        if (shouldShowGitCleanupProgress(options)) {
+            console.error('Checking branches for git cleanup...');
+        }
+
         const report = buildGitCleanupReport(options);
 
         console.log(renderGitCleanupOutput(report, options.json));

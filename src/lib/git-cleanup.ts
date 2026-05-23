@@ -275,6 +275,16 @@ type GitCleanupReportContext = {
     repoRoot: string;
 };
 
+type CurrentSafeDeleteBranchReportContext = {
+    base: BaseRef;
+    detachedWorktrees: DetachedWorktreeReport[];
+    hiddenRefAnalysis: HiddenRefAnalysis;
+    readCache: GitCleanupReadCache;
+    repositoryReflogAnalysis: ReflogAnalysis;
+    unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis;
+    worktrees: WorktreeInfo[];
+};
+
 type FinalDetachedWorktreeReports = {
     baseIssue: null | string;
     detachedWorktrees: DetachedWorktreeReport[];
@@ -303,6 +313,19 @@ type GitDirectories = {
 };
 
 type GitCommandResult = GitCommandFailure | GitCommandSuccess;
+
+type GitCleanupReadCache = {
+    branchAndOriginRefsByRepo: Map<string, string[]>;
+    gitDirectoriesByRepo: Map<string, GitDirectories | null>;
+    liveOriginBranchesByRepo: Map<string, LiveOriginBranchCache>;
+    patchEquivalenceByRef: Map<string, boolean>;
+    reflogCommitPreservationByRef: Map<string, boolean | null>;
+    repositoryReflogSnapshotsByRepo: Map<
+        string,
+        null | RepositoryReflogSnapshot
+    >;
+    treeShasByRef: Map<string, null | string>;
+};
 
 type HiddenRefAnalysis = {
     available: boolean;
@@ -365,6 +388,13 @@ type LiveOriginBranchProbe =
     | LiveOriginBranchPresentProbe
     | LiveOriginBranchUnverifiedProbe;
 
+type LiveOriginBranchCache =
+    | {
+          branches: Map<string, string>;
+          kind: 'ready';
+      }
+    | LiveOriginBranchUnverifiedProbe;
+
 type ParsedArgument = {
     nextIndex: number;
     option: Partial<Options>;
@@ -397,6 +427,11 @@ type RepositoryUnreachableCommitAnalysis = {
     available: boolean;
     commitCount: number;
     fingerprint: null | string;
+};
+
+type RepositoryReflogSnapshot = {
+    fingerprint: string;
+    shas: Set<string>;
 };
 
 type RemoteBranchAssessment = {
@@ -552,7 +587,7 @@ export type GitCleanupWorktreeInfo = WorktreeInfo;
 
 const BACKUP_SUFFIX_LENGTH = 8;
 const COMMIT_FORMAT = '%H%x1f%cI%x1f%an%x1f%s';
-const DEFAULT_APPLY_COMMAND = 'slop-refinery git-cleanup --apply';
+const DEFAULT_APPLY_COMMAND = 'npx slop-refinery git-cleanup --apply';
 const GIT_ADMIN_DIRECTORIES = ['rebase-apply', 'rebase-merge', 'sequencer'];
 const GIT_ADMIN_FILES = [
     'AUTO_MERGE',
@@ -1379,6 +1414,7 @@ function remoteApplyResultSucceeded(result: ApplyResult): boolean {
 
 function buildReportContext(options: Options): GitCleanupReportContext {
     const repoRoot = readGit(process.cwd(), ['rev-parse', '--show-toplevel']);
+    const readCache = createGitCleanupReadCache();
     assertNoHistoryRewriteOverlays(repoRoot);
     const base = detectBaseRef(repoRoot, options.base);
     const localBranches = listBranches(repoRoot);
@@ -1388,6 +1424,7 @@ function buildReportContext(options: Options): GitCleanupReportContext {
     const repositoryReflogAnalysis = readRepositoryReflogAnalysis(
         repoRoot,
         base.liveSha,
+        readCache,
     );
     const hiddenRefAnalysis = readReachableHiddenRefAnalysis(
         repoRoot,
@@ -1400,6 +1437,7 @@ function buildReportContext(options: Options): GitCleanupReportContext {
         hiddenRefAnalysis,
         repositoryReflogAnalysis,
         unreachableCommitAnalysis,
+        readCache,
     );
     const initialBranches = buildBranchBuckets(
         repoRoot,
@@ -1411,6 +1449,7 @@ function buildReportContext(options: Options): GitCleanupReportContext {
         repositoryReflogAnalysis,
         unreachableCommitAnalysis,
         options.applyCommand ?? DEFAULT_APPLY_COMMAND,
+        readCache,
     );
     const finalBaseIssue = readLiveBaseValidationIssue(repoRoot, base);
     const revalidatedBranches =
@@ -1423,14 +1462,13 @@ function buildReportContext(options: Options): GitCleanupReportContext {
         detachedWorktrees,
         finalBaseIssue,
     );
-    const branches = reconcileBranchesWithFinalProof(
-        revalidatedBranches,
-        finalDetachedWorktreeReports,
-    );
 
     return {
         base,
-        branches,
+        branches: reconcileBranchesWithFinalProof(
+            revalidatedBranches,
+            finalDetachedWorktreeReports,
+        ),
         detachedWorktrees: finalDetachedWorktreeReports.detachedWorktrees,
         repoRoot,
     };
@@ -1464,7 +1502,11 @@ function readFinalDetachedWorktreeReports(
         };
     }
 
-    const currentProof = readCurrentDetachedWorktreeProof(repoRoot, base);
+    const currentProof = readCurrentDetachedWorktreeProof(
+        repoRoot,
+        base,
+        createGitCleanupReadCache(),
+    );
     const finalBaseIssue = readLiveBaseValidationIssue(repoRoot, base);
     const finalProofIssue = finalBaseIssue ?? currentProof.repositoryIssue;
 
@@ -1491,6 +1533,7 @@ function readCurrentDetachedWorktreeReports(
 function readCurrentDetachedWorktreeProof(
     repoRoot: string,
     base: BaseRef,
+    readCache = createGitCleanupReadCache(),
 ): CurrentDetachedWorktreeProof {
     const worktrees = listWorktrees(repoRoot);
     const unreachableCommitAnalysis =
@@ -1498,6 +1541,7 @@ function readCurrentDetachedWorktreeProof(
     const repositoryReflogAnalysis = readRepositoryReflogAnalysis(
         repoRoot,
         base.liveSha,
+        readCache,
     );
     const hiddenRefAnalysis = readReachableHiddenRefAnalysis(
         repoRoot,
@@ -1512,6 +1556,7 @@ function readCurrentDetachedWorktreeProof(
             hiddenRefAnalysis,
             repositoryReflogAnalysis,
             unreachableCommitAnalysis,
+            readCache,
         ),
         repositoryIssue: readRepositoryStateRevalidationIssue(
             repoRoot,
@@ -2052,14 +2097,32 @@ function revalidateSafeDeleteBranchProofs(
     base: BaseRef,
     branches: BranchBuckets,
 ): BranchBuckets {
+    if (branches.safeDelete.length === 0) {
+        return branches;
+    }
+
     const safeDelete: BranchReport[] = [];
     const needsReview = [...branches.needsReview];
+    const revalidationContextResult = readSafeDeleteRevalidationContext(
+        repoRoot,
+        base,
+    );
+
+    if (revalidationContextResult.status === 'failed') {
+        return failClosedSafeDeleteBranches(
+            branches,
+            revalidationContextResult.reason,
+        );
+    }
+
+    const revalidationContext = revalidationContextResult.context;
 
     for (const branch of branches.safeDelete) {
         const staleProofIssue = readSafeDeleteProofValidation(
             repoRoot,
             base,
             branch,
+            revalidationContext,
         );
 
         if (staleProofIssue === null) {
@@ -2086,6 +2149,35 @@ function revalidateSafeDeleteBranchProofs(
         safeDelete: sortByName(safeDelete),
         skipped: branches.skipped,
     };
+}
+
+function readSafeDeleteRevalidationContext(
+    repoRoot: string,
+    base: BaseRef,
+):
+    | {
+          context: CurrentSafeDeleteBranchReportContext;
+          status: 'ready';
+      }
+    | {
+          reason: string;
+          status: 'failed';
+      } {
+    try {
+        return {
+            context: readCurrentSafeDeleteBranchReportContext(
+                repoRoot,
+                base,
+                createGitCleanupReadCache(),
+            ),
+            status: 'ready',
+        };
+    } catch (error) {
+        return {
+            reason: `safe-delete proofs could not be revalidated: ${readUnknownErrorMessage(error)}`,
+            status: 'failed',
+        };
+    }
 }
 
 function reconcileApplyReportBranches(
@@ -2205,6 +2297,7 @@ function readSafeDeleteProofValidation(
     repoRoot: string,
     base: BaseRef,
     branch: BranchReport,
+    context?: CurrentSafeDeleteBranchReportContext,
 ): {
     reason: string;
     refreshedBranch?: BranchReport;
@@ -2215,6 +2308,7 @@ function readSafeDeleteProofValidation(
             repoRoot,
             base,
             branch.name,
+            context,
         );
 
         if (refreshedBranch.classification !== 'safe_delete') {
@@ -2311,6 +2405,18 @@ function readGitRaw(cwd: string, args: readonly string[]): string {
         env: GIT_DISABLED_REWRITE_ENV,
         stdio: ['ignore', 'pipe', 'pipe'],
     });
+}
+
+function createGitCleanupReadCache(): GitCleanupReadCache {
+    return {
+        branchAndOriginRefsByRepo: new Map(),
+        gitDirectoriesByRepo: new Map(),
+        liveOriginBranchesByRepo: new Map(),
+        patchEquivalenceByRef: new Map(),
+        reflogCommitPreservationByRef: new Map(),
+        repositoryReflogSnapshotsByRepo: new Map(),
+        treeShasByRef: new Map(),
+    };
 }
 
 function assertNoHistoryRewriteOverlays(repoRoot: string): void {
@@ -2469,7 +2575,19 @@ function tryGit(cwd: string, args: readonly string[]): GitCommandResult {
     }
 }
 
-function readGitDirectories(repoPath: string): GitDirectories | null {
+function readGitDirectories(
+    repoPath: string,
+    readCache?: GitCleanupReadCache,
+): GitDirectories | null {
+    const cachedGitDirectories = readCache?.gitDirectoriesByRepo.get(repoPath);
+
+    if (
+        readCache !== undefined &&
+        readCache.gitDirectoriesByRepo.has(repoPath)
+    ) {
+        return cachedGitDirectories ?? null;
+    }
+
     const absoluteGitDir = tryGit(repoPath, [
         'rev-parse',
         '--path-format=absolute',
@@ -2481,19 +2599,20 @@ function readGitDirectories(repoPath: string): GitDirectories | null {
         '--git-common-dir',
     ]);
 
-    if (
+    const gitDirectories =
         !absoluteGitDir.ok ||
         absoluteGitDir.stdout === '' ||
         !commonGitDir.ok ||
         commonGitDir.stdout === ''
-    ) {
-        return null;
-    }
+            ? null
+            : {
+                  absoluteGitDir: absoluteGitDir.stdout,
+                  commonGitDir: commonGitDir.stdout,
+              };
 
-    return {
-        absoluteGitDir: absoluteGitDir.stdout,
-        commonGitDir: commonGitDir.stdout,
-    };
+    readCache?.gitDirectoriesByRepo.set(repoPath, gitDirectories);
+
+    return gitDirectories;
 }
 
 function readProcessOutput(error: unknown, key: 'stderr' | 'stdout'): string {
@@ -2979,8 +3098,12 @@ function readRepositoryUnreachableCommitAnalysis(
 function readRepositoryReflogAnalysis(
     repoPath: string,
     baseRef: string,
+    readCache?: GitCleanupReadCache,
 ): ReflogAnalysis {
-    const repositoryReflogSnapshot = readRepositoryReflogSnapshot(repoPath);
+    const repositoryReflogSnapshot = readRepositoryReflogSnapshot(
+        repoPath,
+        readCache,
+    );
 
     if (repositoryReflogSnapshot === null) {
         return {
@@ -2990,9 +3113,12 @@ function readRepositoryReflogAnalysis(
         };
     }
 
-    const uniqueCommitCount = countReflogOnlyCommits(repoPath, baseRef, [
-        ...repositoryReflogSnapshot.shas,
-    ]);
+    const uniqueCommitCount = countReflogOnlyCommits(
+        repoPath,
+        baseRef,
+        [...repositoryReflogSnapshot.shas],
+        readCache,
+    );
 
     if (uniqueCommitCount === null) {
         return {
@@ -3009,16 +3135,30 @@ function readRepositoryReflogAnalysis(
     };
 }
 
-function readRepositoryReflogSnapshot(repoPath: string): {
-    fingerprint: string;
-    shas: Set<string>;
-} | null {
-    const reflogPaths = readRepositoryReflogPaths(repoPath);
-
-    if (reflogPaths === null) {
-        return null;
+function readRepositoryReflogSnapshot(
+    repoPath: string,
+    readCache?: GitCleanupReadCache,
+): null | RepositoryReflogSnapshot {
+    if (readCache?.repositoryReflogSnapshotsByRepo.has(repoPath) === true) {
+        return readCache.repositoryReflogSnapshotsByRepo.get(repoPath) ?? null;
     }
 
+    const reflogPaths = readRepositoryReflogPaths(repoPath, readCache);
+
+    if (reflogPaths === null) {
+        return cacheRepositoryReflogSnapshot(repoPath, null, readCache);
+    }
+
+    return cacheRepositoryReflogSnapshot(
+        repoPath,
+        buildRepositoryReflogSnapshot(reflogPaths),
+        readCache,
+    );
+}
+
+function buildRepositoryReflogSnapshot(
+    reflogPaths: readonly string[],
+): null | RepositoryReflogSnapshot {
     const reflogShas = new Set<string>();
     const reflogFingerprints: string[] = [];
 
@@ -3044,8 +3184,21 @@ function readRepositoryReflogSnapshot(repoPath: string): {
     };
 }
 
-function readRepositoryReflogPaths(repoPath: string): null | string[] {
-    const gitDirectories = readGitDirectories(repoPath);
+function cacheRepositoryReflogSnapshot(
+    repoPath: string,
+    snapshot: null | RepositoryReflogSnapshot,
+    readCache?: GitCleanupReadCache,
+): null | RepositoryReflogSnapshot {
+    readCache?.repositoryReflogSnapshotsByRepo.set(repoPath, snapshot);
+
+    return snapshot;
+}
+
+function readRepositoryReflogPaths(
+    repoPath: string,
+    readCache?: GitCleanupReadCache,
+): null | string[] {
+    const gitDirectories = readGitDirectories(repoPath, readCache);
 
     if (gitDirectories === null) {
         return null;
@@ -3593,6 +3746,7 @@ function buildBranchBuckets(
     repositoryReflogAnalysis: ReflogAnalysis,
     unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
     applyCommand: string,
+    readCache?: GitCleanupReadCache,
 ): BranchBuckets {
     const skipped: SkippedBranchReport[] = [];
     const safeDelete: BranchReport[] = [];
@@ -3610,6 +3764,7 @@ function buildBranchBuckets(
             repositoryReflogAnalysis,
             unreachableCommitAnalysis,
             applyCommand,
+            readCache,
         );
 
         if (branch === base.branchName) {
@@ -3664,6 +3819,7 @@ function buildBranchReport(
     repositoryReflogAnalysis: ReflogAnalysis,
     unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
     applyCommand = DEFAULT_APPLY_COMMAND,
+    readCache?: GitCleanupReadCache,
 ): BranchReport {
     const linkedWorktrees = worktrees.filter(
         (worktree) => worktree.branchName === branch,
@@ -3685,8 +3841,9 @@ function buildBranchReport(
         repoRoot,
         base.liveSha,
         branch,
+        readCache,
     );
-    const remoteBranch = assessRemoteBranch(repoRoot, base, branch);
+    const remoteBranch = assessRemoteBranch(repoRoot, base, branch, readCache);
     const state = buildBranchState(
         repoRoot,
         base.liveSha,
@@ -3701,6 +3858,7 @@ function buildBranchReport(
         repositoryReflogAnalysis,
         unreachableCommitAnalysis,
         remoteBranch,
+        readCache,
     );
 
     return {
@@ -3813,6 +3971,7 @@ function readBranchReflogAnalysis(
     repoRoot: string,
     baseRef: string,
     branch: string,
+    readCache?: GitCleanupReadCache,
 ): ReflogAnalysis {
     if (isBranchSymbolicRef(repoRoot, branch)) {
         return {
@@ -3822,7 +3981,7 @@ function readBranchReflogAnalysis(
         };
     }
 
-    const gitDirectories = readGitDirectories(repoRoot);
+    const gitDirectories = readGitDirectories(repoRoot, readCache);
 
     if (gitDirectories === null) {
         return {
@@ -3862,6 +4021,7 @@ function readBranchReflogAnalysis(
         repoRoot,
         baseRef,
         parsedReflog.shas,
+        readCache,
     );
 
     if (uniqueCommitCount === null) {
@@ -3941,15 +4101,23 @@ function countReflogOnlyCommits(
     repoRoot: string,
     baseRef: string,
     reflogShas: readonly string[],
+    readCache?: GitCleanupReadCache,
 ): null | number {
     const uniqueCommitShas: string[] = [];
 
     for (const sha of reflogShas) {
-        if (!gitSucceeded(repoRoot, ['cat-file', '-e', `${sha}^{commit}`])) {
+        const preserved = readReflogCommitPreservation(
+            repoRoot,
+            baseRef,
+            sha,
+            readCache,
+        );
+
+        if (preserved === null) {
             return null;
         }
 
-        if (!commitIsPracticallyPreserved(repoRoot, baseRef, sha)) {
+        if (!preserved) {
             uniqueCommitShas.push(sha);
         }
     }
@@ -3957,10 +4125,41 @@ function countReflogOnlyCommits(
     return uniqueCommitShas.length;
 }
 
+function readReflogCommitPreservation(
+    repoRoot: string,
+    baseRef: string,
+    commitSha: string,
+    readCache?: GitCleanupReadCache,
+): boolean | null {
+    const cacheKey = `${repoRoot}\u001f${baseRef}\u001f${commitSha}`;
+    const cachedPreservation =
+        readCache?.reflogCommitPreservationByRef.get(cacheKey);
+
+    if (
+        readCache !== undefined &&
+        readCache.reflogCommitPreservationByRef.has(cacheKey)
+    ) {
+        return cachedPreservation ?? null;
+    }
+
+    const preserved = !gitSucceeded(repoRoot, [
+        'cat-file',
+        '-e',
+        `${commitSha}^{commit}`,
+    ])
+        ? null
+        : commitIsPracticallyPreserved(repoRoot, baseRef, commitSha, readCache);
+
+    readCache?.reflogCommitPreservationByRef.set(cacheKey, preserved);
+
+    return preserved;
+}
+
 function commitIsPracticallyPreserved(
     repoRoot: string,
     baseRef: string,
     commitSha: string,
+    readCache?: GitCleanupReadCache,
 ): boolean {
     return (
         gitSucceeded(repoRoot, [
@@ -3968,7 +4167,7 @@ function commitIsPracticallyPreserved(
             '--is-ancestor',
             commitSha,
             baseRef,
-        ]) || refPatchEquivalentToBase(repoRoot, baseRef, commitSha)
+        ]) || refPatchEquivalentToBase(repoRoot, baseRef, commitSha, readCache)
     );
 }
 
@@ -3976,11 +4175,17 @@ function assessRemoteBranch(
     repoRoot: string,
     base: BaseRef,
     branch: string,
+    readCache?: GitCleanupReadCache,
 ): null | RemoteBranchAssessment {
     const upstream = readUpstreamInfo(repoRoot, branch);
 
     if (upstream === null) {
-        return assessBranchWithoutOriginUpstream(repoRoot, base, branch);
+        return assessBranchWithoutOriginUpstream(
+            repoRoot,
+            base,
+            branch,
+            readCache,
+        );
     }
 
     if (upstream.branch === '') {
@@ -3991,7 +4196,7 @@ function assessRemoteBranch(
         return buildNonOriginRemoteBranch(upstream);
     }
 
-    return buildOriginRemoteBranch(repoRoot, base, upstream);
+    return buildOriginRemoteBranch(repoRoot, base, upstream, readCache);
 }
 
 function readUpstreamInfo(
@@ -4030,10 +4235,15 @@ function assessBranchWithoutOriginUpstream(
     repoRoot: string,
     base: BaseRef,
     branch: string,
+    readCache?: GitCleanupReadCache,
 ): RemoteBranchAssessment {
     const shortName = `origin/${branch}`;
     const localTrackingSha = readTrackedRemoteSha(repoRoot, shortName);
-    const liveBranchProbe = readLiveOriginBranchProbe(repoRoot, branch);
+    const liveBranchProbe = readLiveOriginBranchProbe(
+        repoRoot,
+        branch,
+        readCache,
+    );
     const liveSha =
         liveBranchProbe.kind === 'present' ? liveBranchProbe.sha : null;
     const status = readOriginRemoteBranchStatus(
@@ -4043,6 +4253,7 @@ function assessBranchWithoutOriginUpstream(
         shortName,
         liveBranchProbe,
         localTrackingSha,
+        readCache,
     );
     const remoteSafetyProofFingerprint = remoteBranchStatusHasSafeProof(status)
         ? readRemoteSafetyProofFingerprint(
@@ -4051,6 +4262,7 @@ function assessBranchWithoutOriginUpstream(
               branch,
               shortName,
               localTrackingSha,
+              readCache,
           )
         : null;
     const localTrackingProofFingerprint = remoteBranchStatusHasSafeProof(status)
@@ -4059,6 +4271,7 @@ function assessBranchWithoutOriginUpstream(
               base,
               shortName,
               localTrackingSha,
+              readCache,
           )
         : null;
 
@@ -4077,7 +4290,12 @@ function assessBranchWithoutOriginUpstream(
 function readLiveOriginBranchProbe(
     repoRoot: string,
     branch: string,
+    readCache?: GitCleanupReadCache,
 ): LiveOriginBranchProbe {
+    if (readCache !== undefined) {
+        return readCachedLiveOriginBranchProbe(repoRoot, branch, readCache);
+    }
+
     const output = tryGit(repoRoot, [
         'ls-remote',
         'origin',
@@ -4104,6 +4322,96 @@ function readLiveOriginBranchProbe(
           }
         : {
               kind: 'present',
+              sha,
+          };
+}
+
+function readCachedLiveOriginBranchProbe(
+    repoRoot: string,
+    branch: string,
+    readCache: GitCleanupReadCache,
+): LiveOriginBranchProbe {
+    const liveOriginBranches = readCachedLiveOriginBranches(
+        repoRoot,
+        readCache,
+    );
+
+    if (liveOriginBranches.kind === 'unverified') {
+        return liveOriginBranches;
+    }
+
+    const sha = liveOriginBranches.branches.get(branch);
+
+    return sha === undefined
+        ? { kind: 'absent' }
+        : {
+              kind: 'present',
+              sha,
+          };
+}
+
+function readCachedLiveOriginBranches(
+    repoRoot: string,
+    readCache: GitCleanupReadCache,
+): LiveOriginBranchCache {
+    const cachedLiveOriginBranches =
+        readCache.liveOriginBranchesByRepo.get(repoRoot);
+
+    if (cachedLiveOriginBranches !== undefined) {
+        return cachedLiveOriginBranches;
+    }
+
+    const cache = readLiveOriginBranches(repoRoot);
+
+    readCache.liveOriginBranchesByRepo.set(repoRoot, cache);
+
+    return cache;
+}
+
+function readLiveOriginBranches(repoRoot: string): LiveOriginBranchCache {
+    const output = tryGit(repoRoot, ['ls-remote', 'origin', 'refs/heads/*']);
+
+    if (!output.ok) {
+        return {
+            error: output.error,
+            kind: 'unverified',
+        };
+    }
+
+    return parseLiveOriginBranches(output.stdout);
+}
+
+function parseLiveOriginBranches(output: string): LiveOriginBranchCache {
+    const branches = new Map<string, string>();
+
+    for (const line of output.split('\n').filter((entry) => entry !== '')) {
+        const branch = parseLiveOriginBranchLine(line);
+
+        if (branch === null) {
+            return {
+                error: 'git ls-remote returned an unexpected origin branch line.',
+                kind: 'unverified',
+            };
+        }
+
+        branches.set(branch.name, branch.sha);
+    }
+
+    return {
+        branches,
+        kind: 'ready',
+    };
+}
+
+function parseLiveOriginBranchLine(
+    line: string,
+): { name: string; sha: string } | null {
+    const [sha = '', ref = ''] = line.split('\t');
+
+    return sha === '' || !ref.startsWith('refs/heads/')
+        ? null
+        : {
+              name: ref.slice('refs/heads/'.length),
               sha,
           };
 }
@@ -4156,6 +4464,7 @@ function buildOriginRemoteBranch(
     repoRoot: string,
     base: BaseRef,
     parsedRemote: UpstreamInfo,
+    readCache?: GitCleanupReadCache,
 ): RemoteBranchAssessment {
     const localTrackingSha = readTrackedRemoteSha(
         repoRoot,
@@ -4164,6 +4473,7 @@ function buildOriginRemoteBranch(
     const liveBranchProbe = readLiveOriginBranchProbe(
         repoRoot,
         parsedRemote.branch,
+        readCache,
     );
     const liveSha =
         liveBranchProbe.kind === 'present' ? liveBranchProbe.sha : null;
@@ -4174,6 +4484,7 @@ function buildOriginRemoteBranch(
         parsedRemote.shortName,
         liveBranchProbe,
         localTrackingSha,
+        readCache,
     );
     const remoteSafetyProofFingerprint = remoteBranchStatusHasSafeProof(status)
         ? readRemoteSafetyProofFingerprint(
@@ -4182,6 +4493,7 @@ function buildOriginRemoteBranch(
               parsedRemote.branch,
               parsedRemote.shortName,
               localTrackingSha,
+              readCache,
           )
         : null;
     const localTrackingProofFingerprint = remoteBranchStatusHasSafeProof(status)
@@ -4190,6 +4502,7 @@ function buildOriginRemoteBranch(
               base,
               parsedRemote.shortName,
               localTrackingSha,
+              readCache,
           )
         : null;
 
@@ -4221,6 +4534,7 @@ function readOriginRemoteBranchStatus(
     trackingShortName: string,
     liveBranchProbe: LiveOriginBranchProbe,
     localTrackingSha: null | string,
+    readCache?: GitCleanupReadCache,
 ): RemoteBranchStatus {
     if (branch === base.branchName) {
         return readProtectedOriginBaseStatus(
@@ -4228,6 +4542,7 @@ function readOriginRemoteBranchStatus(
             base,
             trackingShortName,
             liveBranchProbe,
+            readCache,
         );
     }
 
@@ -4252,6 +4567,7 @@ function readOriginRemoteBranchStatus(
         trackingShortName,
         liveBranchProbe.sha,
         localTrackingSha,
+        readCache,
     );
 }
 
@@ -4260,6 +4576,7 @@ function readProtectedOriginBaseStatus(
     base: BaseRef,
     trackingShortName: string,
     liveBranchProbe: LiveOriginBranchProbe,
+    readCache?: GitCleanupReadCache,
 ): RemoteBranchStatus {
     if (liveBranchProbe.kind === 'unverified') {
         return 'live_probe_unverified';
@@ -4288,6 +4605,7 @@ function readProtectedOriginBaseStatus(
         base,
         trackingShortName,
         liveBranchProbe.sha,
+        readCache,
     );
 
     if (trackingStatus !== 'safe') {
@@ -4304,6 +4622,7 @@ function readPresentOriginRemoteBranchStatus(
     trackingShortName: string,
     liveSha: string,
     localTrackingSha: null | string,
+    readCache?: GitCleanupReadCache,
 ): RemoteBranchStatus {
     const liveTipStatus = readPresentOriginLiveTipStatus(
         repoRoot,
@@ -4311,6 +4630,7 @@ function readPresentOriginRemoteBranchStatus(
         branch,
         liveSha,
         localTrackingSha,
+        readCache,
     );
 
     if (liveTipStatus !== 'safe') {
@@ -4337,6 +4657,7 @@ function readPresentOriginRemoteBranchStatus(
         branch,
         trackingShortName,
         liveSha,
+        readCache,
     );
 }
 
@@ -4346,12 +4667,14 @@ function readInspectablePresentOriginRemoteBranchStatus(
     branch: string,
     trackingShortName: string,
     liveSha: string,
+    readCache?: GitCleanupReadCache,
 ): RemoteBranchStatus {
     const trackingStatus = readLocalTrackingRefStatus(
         repoRoot,
         base,
         trackingShortName,
         liveSha,
+        readCache,
     );
 
     if (trackingStatus !== 'safe') {
@@ -4383,6 +4706,7 @@ function readPresentOriginLiveTipStatus(
     branch: string,
     liveSha: string,
     localTrackingSha: null | string,
+    readCache?: GitCleanupReadCache,
 ): Extract<
     RemoteBranchStatus,
     | 'content_equivalent_to_base'
@@ -4411,11 +4735,11 @@ function readPresentOriginLiveTipStatus(
         return 'safe';
     }
 
-    if (refsHaveSameTree(repoRoot, base.liveSha, liveSha)) {
+    if (refsHaveSameTree(repoRoot, base.liveSha, liveSha, readCache)) {
         return 'content_equivalent_to_base';
     }
 
-    return refPatchEquivalentToBase(repoRoot, base.liveSha, liveSha)
+    return refPatchEquivalentToBase(repoRoot, base.liveSha, liveSha, readCache)
         ? 'patch_equivalent_to_base'
         : 'live_tip_not_on_base';
 }
@@ -4451,12 +4775,14 @@ function readLocalTrackingRefStatus(
     base: BaseRef,
     trackingShortName: string,
     expectedSha: string,
+    readCache?: GitCleanupReadCache,
 ): LocalTrackingRefProofStatus {
     const proof = readLocalTrackingRefProof(
         repoRoot,
         base,
         trackingShortName,
         expectedSha,
+        readCache,
     );
 
     return proof.status;
@@ -4467,6 +4793,7 @@ function readLocalTrackingRefProof(
     base: BaseRef,
     trackingShortName: string,
     expectedSha: string,
+    readCache?: GitCleanupReadCache,
 ): {
     fingerprint: null | string;
     status: LocalTrackingRefProofStatus;
@@ -4487,7 +4814,7 @@ function readLocalTrackingRefProof(
         };
     }
 
-    const gitDirectories = readGitDirectories(repoRoot);
+    const gitDirectories = readGitDirectories(repoRoot, readCache);
 
     if (gitDirectories === null) {
         return {
@@ -4517,6 +4844,7 @@ function readLocalTrackingRefProof(
         repoRoot,
         base.liveSha,
         parsedReflog.shas,
+        readCache,
     );
 
     if (uniqueCommitCount === null) {
@@ -4913,6 +5241,7 @@ function readRemoteSafetyProofFingerprint(
     branch: string,
     trackingShortName: string,
     localTrackingSha: null | string,
+    readCache?: GitCleanupReadCache,
 ): null | string {
     const inspection = readRemoteHistoryInspection(repoRoot, base);
 
@@ -4930,6 +5259,7 @@ function readRemoteSafetyProofFingerprint(
         base,
         trackingShortName,
         localTrackingSha,
+        readCache,
     );
 
     return readSafeRemoteProofFingerprint(
@@ -4944,6 +5274,7 @@ function readOptionalLocalTrackingRefProof(
     base: BaseRef,
     trackingShortName: string,
     localTrackingSha: null | string,
+    readCache?: GitCleanupReadCache,
 ): null | ReturnType<typeof readLocalTrackingRefProof> {
     return localTrackingSha === null
         ? null
@@ -4952,6 +5283,7 @@ function readOptionalLocalTrackingRefProof(
               base,
               trackingShortName,
               localTrackingSha,
+              readCache,
           );
 }
 
@@ -4960,12 +5292,14 @@ function readSafeLocalTrackingProofFingerprint(
     base: BaseRef,
     trackingShortName: string,
     localTrackingSha: null | string,
+    readCache?: GitCleanupReadCache,
 ): null | string {
     const proof = readOptionalLocalTrackingRefProof(
         repoRoot,
         base,
         trackingShortName,
         localTrackingSha,
+        readCache,
     );
 
     return proof?.status === 'safe' ? proof.fingerprint : null;
@@ -5041,6 +5375,7 @@ function buildBranchState(
     repositoryReflogAnalysis: ReflogAnalysis,
     unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
     remoteBranch: null | RemoteBranchAssessment,
+    readCache?: GitCleanupReadCache,
 ): BranchState {
     const aheadBehind = readAheadBehind(repoRoot, baseRef, branch);
     const linkedWorktreeFlags = readLinkedWorktreeFlags(linkedWorktrees);
@@ -5051,13 +5386,24 @@ function buildBranchState(
         branch,
         baseRef,
     ]);
-    const contentEquivalentToBase = refsHaveSameTree(repoRoot, baseRef, branch);
+    const contentEquivalentToBase = refsHaveSameTree(
+        repoRoot,
+        baseRef,
+        branch,
+        readCache,
+    );
     const patchEquivalentToBase = refPatchEquivalentToBase(
         repoRoot,
         baseRef,
         branch,
+        readCache,
     );
-    const duplicateTreeRefs = readDuplicateTreeRefs(repoRoot, baseRef, branch);
+    const duplicateTreeRefs = readDuplicateTreeRefs(
+        repoRoot,
+        baseRef,
+        branch,
+        readCache,
+    );
     const originBranchStatus = remoteBranch?.status ?? 'absent';
     const hasBlockingDetachedWorktree = detachedWorktrees.some(
         (worktree) => !worktree.state.safeToRemoveManually,
@@ -5181,56 +5527,97 @@ function refsHaveSameTree(
     repoRoot: string,
     leftRef: string,
     rightRef: string,
+    readCache?: GitCleanupReadCache,
 ): boolean {
-    const leftTree = readTreeSha(repoRoot, leftRef);
-    const rightTree = readTreeSha(repoRoot, rightRef);
+    const leftTree = readTreeSha(repoRoot, leftRef, readCache);
+    const rightTree = readTreeSha(repoRoot, rightRef, readCache);
 
     return leftTree !== null && leftTree === rightTree;
 }
 
-function readTreeSha(repoRoot: string, ref: string): null | string {
-    const result = tryGit(repoRoot, ['rev-parse', `${ref}^{tree}`]);
+function readTreeSha(
+    repoRoot: string,
+    ref: string,
+    readCache?: GitCleanupReadCache,
+): null | string {
+    const cacheKey = `${repoRoot}\u001f${ref}`;
+    const cachedTreeSha = readCache?.treeShasByRef.get(cacheKey);
 
-    return result.ok && result.stdout !== '' ? result.stdout : null;
+    if (readCache !== undefined && readCache.treeShasByRef.has(cacheKey)) {
+        return cachedTreeSha ?? null;
+    }
+
+    const result = tryGit(repoRoot, ['rev-parse', `${ref}^{tree}`]);
+    const treeSha = result.ok && result.stdout !== '' ? result.stdout : null;
+
+    readCache?.treeShasByRef.set(cacheKey, treeSha);
+
+    return treeSha;
 }
 
 function refPatchEquivalentToBase(
     repoRoot: string,
     baseRef: string,
     ref: string,
+    readCache?: GitCleanupReadCache,
 ): boolean {
+    const cacheKey = `${repoRoot}\u001f${baseRef}\u001f${ref}`;
+    const cachedEquivalence = readCache?.patchEquivalenceByRef.get(cacheKey);
+
+    if (
+        readCache !== undefined &&
+        readCache.patchEquivalenceByRef.has(cacheKey)
+    ) {
+        return cachedEquivalence ?? false;
+    }
+
     const result = tryGit(repoRoot, ['cherry', baseRef, ref]);
 
     if (!result.ok) {
+        readCache?.patchEquivalenceByRef.set(cacheKey, false);
         return false;
     }
 
-    return result.stdout
+    const equivalent = result.stdout
         .split('\n')
         .filter((line) => line !== '')
         .every((line) => line.startsWith('-'));
+
+    readCache?.patchEquivalenceByRef.set(cacheKey, equivalent);
+
+    return equivalent;
 }
 
 function readDuplicateTreeRefs(
     repoRoot: string,
     baseRef: string,
     branch: string,
+    readCache?: GitCleanupReadCache,
 ): string[] {
-    const branchTree = readTreeSha(repoRoot, branch);
+    const branchTree = readTreeSha(repoRoot, branch, readCache);
 
     if (branchTree === null) {
         return [];
     }
 
-    const refs = readBranchAndOriginRefs(repoRoot);
+    const refs = readBranchAndOriginRefs(repoRoot, readCache);
 
     return refs
         .filter((ref) => ref !== branch && ref !== baseRef)
-        .filter((ref) => readTreeSha(repoRoot, ref) === branchTree)
+        .filter((ref) => readTreeSha(repoRoot, ref, readCache) === branchTree)
         .slice(0, 10);
 }
 
-function readBranchAndOriginRefs(repoRoot: string): string[] {
+function readBranchAndOriginRefs(
+    repoRoot: string,
+    readCache?: GitCleanupReadCache,
+): string[] {
+    const cachedRefs = readCache?.branchAndOriginRefsByRepo.get(repoRoot);
+
+    if (cachedRefs !== undefined) {
+        return cachedRefs;
+    }
+
     const result = tryGit(repoRoot, [
         'for-each-ref',
         'refs/heads',
@@ -5239,12 +5626,17 @@ function readBranchAndOriginRefs(repoRoot: string): string[] {
     ]);
 
     if (!result.ok || result.stdout === '') {
+        readCache?.branchAndOriginRefsByRepo.set(repoRoot, []);
         return [];
     }
 
-    return result.stdout
+    const refs = result.stdout
         .split('\n')
         .filter((ref) => ref !== '' && ref !== 'origin/HEAD');
+
+    readCache?.branchAndOriginRefsByRepo.set(repoRoot, refs);
+
+    return refs;
 }
 
 function readLinkedWorktreeFlags(linkedWorktrees: readonly WorktreeInfo[]): {
@@ -5928,6 +6320,7 @@ function buildDetachedWorktreeReports(
     hiddenRefAnalysis: HiddenRefAnalysis,
     repositoryReflogAnalysis: ReflogAnalysis,
     unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
+    readCache?: GitCleanupReadCache,
 ): DetachedWorktreeReport[] {
     const reports: DetachedWorktreeReport[] = [];
 
@@ -5946,6 +6339,7 @@ function buildDetachedWorktreeReports(
                     hiddenRefAnalysis,
                     repositoryReflogAnalysis,
                     unreachableCommitAnalysis,
+                    readCache,
                 ),
             );
         }
@@ -5963,10 +6357,12 @@ function buildDetachedWorktreeReport(
     hiddenRefAnalysis: HiddenRefAnalysis,
     repositoryReflogAnalysis: ReflogAnalysis,
     unreachableCommitAnalysis: RepositoryUnreachableCommitAnalysis,
+    readCache?: GitCleanupReadCache,
 ): DetachedWorktreeReport {
     const headReflogAnalysis = readDetachedHeadReflogAnalysis(
         worktree.path,
         base.liveSha,
+        readCache,
     );
     const headOnBase = gitSucceeded(repoRoot, [
         'merge-base',
@@ -6049,6 +6445,7 @@ function isDetachedWorktreeSafeToRemoveManually(
 function readDetachedHeadReflogAnalysis(
     repoPath: string,
     baseRef: string,
+    readCache?: GitCleanupReadCache,
 ): ReflogAnalysis {
     const absoluteGitDir = tryGit(repoPath, [
         'rev-parse',
@@ -6079,6 +6476,7 @@ function readDetachedHeadReflogAnalysis(
         repoPath,
         baseRef,
         parsedReflog.shas,
+        readCache,
     );
 
     if (uniqueCommitCount === null) {
@@ -7883,6 +8281,7 @@ function readRevalidatedBranchReport(
     expectedBase: BaseRef,
     branchName: string,
 ): BranchAuditSnapshot {
+    const readCache = createGitCleanupReadCache();
     assertNoHistoryRewriteOverlays(repoRoot);
     const base = detectBaseRef(
         repoRoot,
@@ -7895,6 +8294,7 @@ function readRevalidatedBranchReport(
     const repositoryReflogAnalysis = readRepositoryReflogAnalysis(
         repoRoot,
         base.liveSha,
+        readCache,
     );
     const hiddenRefAnalysis = readReachableHiddenRefAnalysis(
         repoRoot,
@@ -7916,10 +8316,13 @@ function readRevalidatedBranchReport(
                 hiddenRefAnalysis,
                 repositoryReflogAnalysis,
                 unreachableCommitAnalysis,
+                readCache,
             ),
             hiddenRefAnalysis,
             repositoryReflogAnalysis,
             unreachableCommitAnalysis,
+            DEFAULT_APPLY_COMMAND,
+            readCache,
         ),
     };
 }
@@ -9693,7 +10096,31 @@ function readCurrentSafeDeleteBranchReport(
     repoRoot: string,
     base: BaseRef,
     branchName: string,
+    context = readCurrentSafeDeleteBranchReportContext(
+        repoRoot,
+        base,
+        createGitCleanupReadCache(),
+    ),
 ): BranchReport {
+    return buildBranchReport(
+        repoRoot,
+        context.base,
+        branchName,
+        context.worktrees,
+        context.detachedWorktrees,
+        context.hiddenRefAnalysis,
+        context.repositoryReflogAnalysis,
+        context.unreachableCommitAnalysis,
+        DEFAULT_APPLY_COMMAND,
+        context.readCache,
+    );
+}
+
+function readCurrentSafeDeleteBranchReportContext(
+    repoRoot: string,
+    base: BaseRef,
+    readCache: GitCleanupReadCache,
+): CurrentSafeDeleteBranchReportContext {
     const refreshedBase = detectBaseRef(
         repoRoot,
         base.ref,
@@ -9705,30 +10132,32 @@ function readCurrentSafeDeleteBranchReport(
     const refreshedRepositoryReflogAnalysis = readRepositoryReflogAnalysis(
         repoRoot,
         refreshedBase.liveSha,
+        readCache,
     );
     const refreshedHiddenRefAnalysis = readReachableHiddenRefAnalysis(
         repoRoot,
         refreshedBase.liveSha,
     );
     const refreshedWorktrees = listWorktrees(repoRoot);
-
-    return buildBranchReport(
+    const refreshedDetachedWorktrees = buildDetachedWorktreeReports(
         repoRoot,
         refreshedBase,
-        branchName,
         refreshedWorktrees,
-        buildDetachedWorktreeReports(
-            repoRoot,
-            refreshedBase,
-            refreshedWorktrees,
-            refreshedHiddenRefAnalysis,
-            refreshedRepositoryReflogAnalysis,
-            refreshedUnreachableCommitAnalysis,
-        ),
         refreshedHiddenRefAnalysis,
         refreshedRepositoryReflogAnalysis,
         refreshedUnreachableCommitAnalysis,
+        readCache,
     );
+
+    return {
+        base: refreshedBase,
+        detachedWorktrees: refreshedDetachedWorktrees,
+        hiddenRefAnalysis: refreshedHiddenRefAnalysis,
+        readCache,
+        repositoryReflogAnalysis: refreshedRepositoryReflogAnalysis,
+        unreachableCommitAnalysis: refreshedUnreachableCommitAnalysis,
+        worktrees: refreshedWorktrees,
+    };
 }
 
 function branchSafetyProofStillMatches(
@@ -11121,6 +11550,109 @@ function renderOutput(report: GitCleanupReport, json: boolean): string {
     return json ? JSON.stringify(report, null, 2) : renderReport(report);
 }
 
+const BRANCH_REASON_CODES_NOT_REQUIRING_REVIEW = new Set<BranchReasonCode>([
+    'branch_content_equivalent_to_base',
+    'branch_patch_equivalent_to_base',
+    'branch_tip_on_base',
+    'linked_worktree_prunable',
+    'linked_worktrees_all_safe',
+    'no_linked_worktrees',
+    'origin_branch_absent',
+    'origin_branch_content_equivalent_to_base',
+    'origin_branch_patch_equivalent_to_base',
+]);
+
+const REMOTE_BRANCH_STATUS_LABELS = new Map<RemoteBranchStatus, string>([
+    ['absent', 'none'],
+    ['checked_out_in_origin_worktree', 'checked out in another worktree'],
+    ['content_equivalent_to_base', 'content already on base'],
+    ['history_not_on_base', 'history not on base'],
+    ['history_unverified', 'history not verified'],
+    ['identity_unverified', 'identity not verified'],
+    ['live_probe_unverified', 'live branch check failed'],
+    ['live_tip_not_on_base', 'live tip not on base'],
+    ['live_tip_unverified', 'live tip not verified'],
+    ['non_origin_upstream', 'not an origin branch'],
+    ['patch_equivalent_to_base', 'patch already on base'],
+    ['protected_base', 'protected base branch'],
+    ['safe', 'safe to delete'],
+    ['tracking_ref_not_on_base', 'tracking ref not on base'],
+]);
+
+const HUMAN_REASON_LABELS = new Map<string, string>([
+    [
+        'branch_checked_out_in_primary_worktree',
+        'checked out in the main worktree',
+    ],
+    ['branch_content_equivalent_to_base', 'content already on base'],
+    ['branch_patch_equivalent_to_base', 'patch already on base'],
+    ['branch_reflog_has_unique_commits', 'branch reflog has unique commits'],
+    ['branch_reflog_unavailable', 'branch reflog unavailable'],
+    ['branch_tip_not_on_base', 'branch tip not on base'],
+    ['branch_tip_on_base', 'branch tip already on base'],
+    ['detached_head_not_on_base', 'detached head not on base'],
+    ['detached_head_on_base', 'detached head already on base'],
+    [
+        'detached_head_reflog_has_unique_commits',
+        'detached reflog has unique commits',
+    ],
+    ['detached_head_reflog_unavailable', 'detached reflog unavailable'],
+    ['detached_worktree_clean', 'detached worktree clean'],
+    ['detached_worktree_dirty', 'detached worktree dirty'],
+    ['detached_worktree_missing', 'detached worktree missing'],
+    ['detached_worktree_prunable', 'detached worktree prunable'],
+    [
+        'detached_worktree_requires_manual_review',
+        'detached worktree needs review',
+    ],
+    ['linked_worktree_dirty', 'linked worktree dirty'],
+    ['linked_worktree_missing', 'linked worktree missing'],
+    ['linked_worktree_prunable', 'linked worktree prunable'],
+    ['linked_worktrees_all_safe', 'linked worktrees safe'],
+    ['linked_worktrees_require_manual_review', 'linked worktrees need review'],
+    ['no_linked_worktrees', 'no linked worktrees'],
+    ['origin_branch_absent', 'origin branch absent'],
+    [
+        'origin_branch_checked_out_in_origin_worktree',
+        'origin branch checked out elsewhere',
+    ],
+    [
+        'origin_branch_content_equivalent_to_base',
+        'origin content already on base',
+    ],
+    ['origin_branch_delete_target_mismatch', 'origin delete target changed'],
+    ['origin_branch_history_not_on_base', 'origin history not on base'],
+    ['origin_branch_history_unverified', 'origin history not verified'],
+    ['origin_branch_identity_unverified', 'origin identity not verified'],
+    ['origin_branch_live_probe_unverified', 'origin live branch check failed'],
+    ['origin_branch_live_tip_not_on_base', 'origin live tip not on base'],
+    ['origin_branch_live_tip_unverified', 'origin live tip not verified'],
+    ['origin_branch_non_origin_upstream', 'branch does not track origin'],
+    ['origin_branch_patch_equivalent_to_base', 'origin patch already on base'],
+    ['origin_branch_protected_base', 'origin branch is protected base'],
+    [
+        'origin_branch_tracking_ref_not_on_base',
+        'origin tracking ref not on base',
+    ],
+    ['repository_hidden_refs_present', 'hidden refs are present'],
+    ['repository_hidden_refs_unavailable', 'hidden refs could not be checked'],
+    ['repository_linked_worktrees_present', 'repository has linked worktrees'],
+    [
+        'repository_reflog_has_unique_commits',
+        'repository reflog has unique commits',
+    ],
+    ['repository_reflog_unavailable', 'repository reflog unavailable'],
+    [
+        'repository_unreachable_commits_present',
+        'repository has unreachable commits',
+    ],
+    [
+        'repository_unreachable_commits_unavailable',
+        'unreachable commits could not be checked',
+    ],
+    ['repository_worktree_dirty', 'repository worktree dirty'],
+]);
+
 function renderReport(report: GitCleanupReport): string {
     const safeDeleteSections = renderBranchSectionsWithApplyResults(
         report.branches.safeDelete,
@@ -11142,27 +11674,32 @@ function renderReport(report: GitCleanupReport): string {
     );
 
     return [
-        '# Git Cleanup Report',
-        `- Repository: \`${report.repoRoot}\``,
-        `- Base branch: \`${report.base.ref}\``,
-        `- Base source: \`${report.base.source}\``,
-        `- Base live SHA: \`${report.base.liveSha.slice(0, 12)}\``,
-        `- Mode: \`${report.mode}\``,
-        `- Generated at: \`${report.generatedAt}\``,
-        `- Safe to delete branches: ${report.summary.safeDeleteBranches}`,
-        `- Needs review branches: ${report.summary.needsReviewBranches}`,
-        `- Protected branches: ${report.summary.protectedBranches}`,
-        `- Skipped branches: ${report.summary.skippedBranches}`,
-        `- Detached worktrees: ${report.summary.detachedWorktrees}`,
-        ...renderArchivePruneSummary(report),
-        ...renderReportSection('## Safe To Delete', safeDeleteSections),
-        ...renderReportSection('## Protected Branches', protectedSections),
-        ...renderReportSection('## Needs Review', needsReviewSections),
+        '# Git Cleanup',
+        ...renderReportSection('## Summary', renderSummarySection(report)),
+        ...renderReportSection('## Can Delete', safeDeleteSections),
+        ...renderReportSection('## Need Review', needsReviewSections),
+        ...renderReportSection('## Protected', protectedSections),
         ...renderReportSection('## Skipped', skippedSections),
         ...renderReportSection('## Detached Worktrees', detachedSections),
         ...renderArchivePruneSection(report),
         ...renderActionSummarySection(report),
     ].join('\n');
+}
+
+function renderSummarySection(report: GitCleanupReport): string[] {
+    return [
+        `- Analyzed branches: ${readAnalyzedBranchCount(report.summary)}`,
+        `- Can safely delete: ${report.summary.safeDeleteBranches}`,
+        `- Need review: ${report.summary.needsReviewBranches}`,
+        `- Protected: ${report.summary.protectedBranches}`,
+        `- Skipped: ${report.summary.skippedBranches}`,
+        `- Detached worktrees: ${report.summary.detachedWorktrees}`,
+        `- Base: \`${report.base.ref}\` at \`${report.base.liveSha.slice(0, 12)}\``,
+        `- Mode: \`${report.mode}\``,
+        `- Repository: \`${report.repoRoot}\``,
+        `- Full safety evidence: run with \`--json\`.`,
+        ...renderArchivePruneSummary(report),
+    ];
 }
 
 function renderActionSummarySection(report: GitCleanupReport): string[] {
@@ -11173,14 +11710,31 @@ function renderActionSummarySection(report: GitCleanupReport): string[] {
 
 function renderActionSummary(report: GitCleanupReport): string {
     return [
+        ...renderActionSummaryCounts(report.summary),
+        ...renderApplyCommandActionSummary(report.branches.safeDelete),
         ...renderApplyResultsActionSummary(report.applyResults),
         ...renderArchivePruneActionSummary(report.archivePruneResults),
-        renderSafeDeleteActionSummary(report.branches.safeDelete),
-        ...renderApplyCommandActionSummary(report.branches.safeDelete),
-        renderProtectedBranchActionSummary(report.branches.protected),
-        renderNeedsReviewActionSummary(report.branches.needsReview),
-        renderDetachedWorktreeActionSummary(report.detachedWorktrees),
     ].join('\n');
+}
+
+function renderActionSummaryCounts(summary: Summary): string[] {
+    return [
+        `- Analyzed branches: ${readAnalyzedBranchCount(summary)}`,
+        `- Can safely delete: ${summary.safeDeleteBranches}`,
+        `- Need review: ${summary.needsReviewBranches}`,
+        `- Protected: ${summary.protectedBranches}`,
+        `- Skipped: ${summary.skippedBranches}`,
+        `- Detached worktrees: ${summary.detachedWorktrees}`,
+    ];
+}
+
+function readAnalyzedBranchCount(summary: Summary): number {
+    return (
+        summary.safeDeleteBranches +
+        summary.needsReviewBranches +
+        summary.protectedBranches +
+        summary.skippedBranches
+    );
 }
 
 function renderApplyResultsActionSummary(
@@ -11229,12 +11783,6 @@ function renderArchivePruneActionSummary(
     return [`- Archive pruning: ${prunedCount} pruned, ${keptCount} kept.`];
 }
 
-function renderSafeDeleteActionSummary(
-    safeDeleteBranches: readonly BranchReport[],
-): string {
-    return `- Delete candidates: ${renderBranchNameList(safeDeleteBranches)}.`;
-}
-
 function renderApplyCommandActionSummary(
     safeDeleteBranches: readonly BranchReport[],
 ): string[] {
@@ -11242,19 +11790,7 @@ function renderApplyCommandActionSummary(
 
     return applyCommand === null
         ? []
-        : [`- To delete them: \`${applyCommand}\`.`];
-}
-
-function renderNeedsReviewActionSummary(
-    needsReviewBranches: readonly BranchReport[],
-): string {
-    return `- Manual review: ${renderBranchNameList(needsReviewBranches)}.`;
-}
-
-function renderProtectedBranchActionSummary(
-    protectedBranches: readonly BranchReport[],
-): string {
-    return `- Protected branches: ${renderBranchNameList(protectedBranches)}.`;
+        : [`- Apply command: \`${applyCommand}\`.`];
 }
 
 function readApplyCommandFromBranches(
@@ -11279,22 +11815,6 @@ function stripDeleteCommandComment(deleteCommand: string): string {
         : deleteCommand.slice(0, commentStart);
 }
 
-function renderBranchNameList(branches: readonly { name: string }[]): string {
-    return branches.length === 0
-        ? 'none'
-        : branches.map((branch) => `\`${branch.name}\``).join(', ');
-}
-
-function renderDetachedWorktreeActionSummary(
-    detachedWorktrees: readonly DetachedWorktreeReport[],
-): string {
-    const count = detachedWorktrees.length;
-
-    return count === 0
-        ? '- Detached worktrees: none.'
-        : `- Detached worktrees needing review: ${count}.`;
-}
-
 function renderArchivePruneSummary(report: GitCleanupReport): string[] {
     const prunedArchiveCount =
         report.archivePruneResults?.filter((result) => result.pruned).length ??
@@ -11313,7 +11833,7 @@ function renderReportSection(
 }
 
 function renderReportSectionBody(sections: readonly string[]): string {
-    return sections.length === 0 ? 'None.' : sections.join('\n\n');
+    return sections.length === 0 ? 'None.' : sections.join('\n');
 }
 
 function renderArchivePruneSection(report: GitCleanupReport): string[] {
@@ -11342,23 +11862,15 @@ function renderBranchSection(
     branch: BranchReport,
     applyResult?: ApplyResult,
 ): string {
-    const lines = [
-        `### \`${branch.name}\``,
-        `- Classification: \`${branch.classification}\``,
-        `- Reason codes: ${renderReasonCodes(branch.reasonCodes)}`,
-        `- Opinion: \`${branch.opinion.code}\` because ${branch.opinion.reason}`,
-        `- Activity: ${branch.activity}`,
-        `- State: safeToDelete=${branch.state.safeToDelete}, branchTipOnBase=${branch.state.branchTipOnBase}, contentEquivalentToBase=${branch.state.contentEquivalentToBase}, patchEquivalentToBase=${branch.state.patchEquivalentToBase}, mergedByHistory=${branch.state.mergedByHistory}, uniqueCommitCount=${branch.state.uniqueCommitCount}, branchReflogAvailable=${branch.state.branchReflogAvailable}, branchReflogUniqueCommitCount=${branch.state.branchReflogUniqueCommitCount}, repositoryLinkedWorktrees=${branch.state.repositoryLinkedWorktreeCount}, repositoryUnreachableCommitsAvailable=${branch.state.repositoryUnreachableCommitsAvailable}, repositoryUnreachableCommitCount=${branch.state.repositoryUnreachableCommitCount}, originBranchStatus=${branch.state.originBranchStatus}, duplicateTreeRefs=${branch.state.duplicateTreeRefs.length}, ahead=${branch.state.aheadCount}, behind=${branch.state.behindCount}, linkedWorktrees=${branch.state.linkedWorktreeCount}`,
-        renderRemoteBranch(branch.remoteBranch),
-    ];
-
-    for (const detail of branch.reasonDetails) {
-        lines.push(`- Detail: ${detail}`);
-    }
+    const summary = [
+        renderBranchClassificationSummary(branch),
+        renderBranchPositionSummary(branch),
+        renderRemoteBranchSummary(branch.remoteBranch),
+        renderLatestCommitSummary(branch.recentCommits),
+    ].join('; ');
+    const lines = [`- \`${branch.name}\`: ${summary}.`];
 
     lines.push(...renderLinkedWorktrees(branch.linkedWorktrees));
-    lines.push(...renderRecentCommits(branch.recentCommits));
-    lines.push(...renderDeleteCommands(branch.deleteCommands));
 
     if (applyResult !== undefined) {
         lines.push(...renderApplyResult(applyResult));
@@ -11367,179 +11879,230 @@ function renderBranchSection(
     return lines.join('\n');
 }
 
-function renderReasonCodes(reasonCodes: readonly string[]): string {
-    if (reasonCodes.length === 0) {
-        return 'none';
+function renderBranchClassificationSummary(branch: BranchReport): string {
+    if (branch.classification === 'safe_delete') {
+        return renderCanDeleteSummary(branch);
     }
 
-    return reasonCodes.map((reasonCode) => `\`${reasonCode}\``).join(', ');
+    if (branch.classification === 'protected_base') {
+        return 'protected';
+    }
+
+    return `needs review: ${renderReviewReasons(branch.reasonCodes)}`;
 }
 
-function renderRemoteBranch(
+function renderCanDeleteSummary(branch: BranchReport): string {
+    if (branch.state.branchTipOnBase) {
+        return 'can delete: branch tip is already on base';
+    }
+
+    if (
+        branch.state.contentEquivalentToBase ||
+        branch.state.patchEquivalentToBase
+    ) {
+        return 'can delete: content is already on base';
+    }
+
+    return 'can delete';
+}
+
+function renderReviewReasons(reasonCodes: readonly BranchReasonCode[]): string {
+    const reviewReasonCodes = reasonCodes.filter(isReviewReasonCode);
+
+    return reviewReasonCodes.length === 0
+        ? 'manual check required'
+        : renderHumanReasonList(reviewReasonCodes);
+}
+
+function isReviewReasonCode(reasonCode: BranchReasonCode): boolean {
+    return !BRANCH_REASON_CODES_NOT_REQUIRING_REVIEW.has(reasonCode);
+}
+
+function renderBranchPositionSummary(branch: BranchReport): string {
+    return `${branch.state.aheadCount} ahead, ${branch.state.behindCount} behind base`;
+}
+
+function renderRemoteBranchSummary(
     remoteBranch: null | RemoteBranchAssessment,
 ): string {
     if (remoteBranch === null) {
-        return '- Remote branch: none';
+        return 'origin: none';
     }
 
-    return `- Remote branch: \`${remoteBranch.shortName}\` (status=${remoteBranch.status}, liveSha=${remoteBranch.liveSha ?? 'none'}, localTrackingSha=${remoteBranch.localTrackingSha ?? 'none'})`;
+    if (remoteBranch.status === 'absent') {
+        return 'origin: none';
+    }
+
+    return `origin: \`${remoteBranch.shortName}\` ${renderRemoteBranchStatus(remoteBranch.status)}`;
+}
+
+function renderRemoteBranchStatus(status: RemoteBranchStatus): string {
+    return REMOTE_BRANCH_STATUS_LABELS.get(status) ?? renderHumanReason(status);
+}
+
+function renderLatestCommitSummary(
+    recentCommits: readonly CommitInfo[],
+): string {
+    const [latestCommit] = recentCommits;
+
+    if (latestCommit === undefined) {
+        return 'latest commit: none shown';
+    }
+
+    return `latest \`${latestCommit.shortSha}\` ${latestCommit.subject}`;
 }
 
 function renderLinkedWorktrees(
     linkedWorktrees: readonly WorktreeInfo[],
 ): string[] {
     if (linkedWorktrees.length === 0) {
-        return ['- Linked worktrees: none'];
+        return [];
     }
 
-    const lines = ['- Linked worktrees:'];
-
-    for (const worktree of linkedWorktrees) {
-        const role = worktree.isPrimary ? 'primary' : 'linked';
-        lines.push(
-            `  - \`${worktree.path}\` (${role}, state=${worktree.state}, statusLines=${worktree.statusLines.length})`,
-        );
-    }
-
-    return lines;
+    return [
+        `  - Worktrees: ${linkedWorktrees.map(renderLinkedWorktree).join('; ')}.`,
+    ];
 }
 
-function renderRecentCommits(recentCommits: readonly CommitInfo[]): string[] {
-    if (recentCommits.length === 0) {
-        return ['- Recent commits: none'];
-    }
+function renderLinkedWorktree(worktree: WorktreeInfo): string {
+    const role = worktree.isPrimary ? 'primary' : 'linked';
+    const status =
+        worktree.statusLines.length === 0
+            ? 'clean'
+            : `${worktree.statusLines.length} status line(s)`;
 
-    const lines = ['- Recent commits:'];
-
-    for (const commit of recentCommits) {
-        lines.push(
-            `  - \`${commit.shortSha}\` ${commit.subject} (${commit.dateIso.slice(0, 10)} by ${commit.author})`,
-        );
-    }
-
-    return lines;
-}
-
-function renderDeleteCommands(deleteCommands: readonly string[]): string[] {
-    if (deleteCommands.length === 0) {
-        return ['- Delete commands: none'];
-    }
-
-    const lines = ['- Delete commands:'];
-
-    for (const command of deleteCommands) {
-        lines.push(`  - \`${command}\``);
-    }
-
-    return lines;
+    return `\`${worktree.path}\` (${role}, ${worktree.state}, ${status})`;
 }
 
 function renderApplyResult(applyResult: ApplyResult): string[] {
-    const removedWorktreeLines =
-        applyResult.removedWorktrees.length === 0
-            ? ['  - Removed worktrees: none']
-            : [
-                  '  - Removed worktrees:',
-                  ...applyResult.removedWorktrees.map(
-                      (worktree) => `    - \`${worktree}\``,
-                  ),
-              ];
-    const worktreeBackupLines =
-        applyResult.worktreeBackupPaths.length === 0
-            ? ['  - Worktree backups: none']
-            : [
-                  '  - Worktree backups:',
-                  ...applyResult.worktreeBackupPaths.map(
-                      (worktree) => `    - \`${worktree}\``,
-                  ),
-              ];
-    const errorLines =
-        applyResult.errors.length === 0
-            ? ['  - Errors: none']
-            : [
-                  '  - Errors:',
-                  ...applyResult.errors.map((error) => `    - ${error}`),
-              ];
+    return [`  - Apply: ${renderApplyResultSummary(applyResult)}.`];
+}
 
+function renderApplyResultSummary(applyResult: ApplyResult): string {
     return [
-        `- Apply result for \`${applyResult.branch}\`:`,
-        ...removedWorktreeLines,
-        ...worktreeBackupLines,
-        `  - Local backup ref: ${applyResult.localBackupRef === null ? 'none' : `\`${applyResult.localBackupRef}\``}`,
-        `  - Local branch deleted: ${applyResult.localBranchDeleted}`,
-        ...(applyResult.localBranchSkippedReason === null
-            ? []
-            : [
-                  `  - Local branch skipped because ${applyResult.localBranchSkippedReason}`,
-              ]),
-        `  - Remote backup ref: ${applyResult.remoteBackupRef === null ? 'none' : `\`${applyResult.remoteBackupRef}\``}`,
-        `  - Remote branch deleted: ${applyResult.remoteBranchDeleted}`,
-        ...(applyResult.remoteBranchSkippedReason === null
-            ? []
-            : [
-                  `  - Remote branch skipped because ${applyResult.remoteBranchSkippedReason}`,
-              ]),
-        ...errorLines,
+        renderApplyBranchStatus(
+            'local',
+            applyResult.localBranchDeleted,
+            applyResult.localBranchSkippedReason,
+        ),
+        renderApplyBranchStatus(
+            'origin',
+            applyResult.remoteBranchDeleted,
+            applyResult.remoteBranchSkippedReason,
+        ),
+        ...renderApplyResultCounts(applyResult),
+    ].join('; ');
+}
+
+function renderApplyBranchStatus(
+    label: string,
+    deleted: boolean,
+    skippedReason: null | string,
+): string {
+    if (deleted) {
+        return `${label} deleted`;
+    }
+
+    return skippedReason === null
+        ? `${label} kept`
+        : `${label} kept: ${skippedReason}`;
+}
+
+function renderApplyResultCounts(applyResult: ApplyResult): string[] {
+    return [
+        ...renderCountIfPresent(
+            applyResult.removedWorktrees.length,
+            'worktree removed',
+            'worktrees removed',
+        ),
+        ...renderCountIfPresent(
+            applyResult.worktreeBackupPaths.length,
+            'worktree backup',
+            'worktree backups',
+        ),
+        ...renderCountIfPresent(applyResult.errors.length, 'error', 'errors'),
     ];
 }
 
 function renderArchivePruneResult(result: ArchivePruneResult): string {
-    return [
-        `### \`${result.ref}\``,
-        `- Repository: \`${result.repoPath}\``,
-        `- Scope: \`${result.scope}\``,
-        `- Archived SHA: ${result.archivedSha === null ? 'none' : `\`${result.archivedSha.slice(0, 12)}\``}`,
-        `- Pruned: ${result.pruned}`,
-        ...(result.skippedReason === null
-            ? []
-            : [`- Skipped because ${result.skippedReason}`]),
-        ...renderArchivePruneErrors(result.errors),
-    ].join('\n');
-}
+    const outcome = result.pruned
+        ? 'pruned'
+        : `kept${result.skippedReason === null ? '' : `: ${result.skippedReason}`}`;
+    const archiveSha =
+        result.archivedSha === null
+            ? 'none'
+            : `\`${result.archivedSha.slice(0, 12)}\``;
+    const errors =
+        result.errors.length === 0 ? '' : `; ${result.errors.length} error(s)`;
 
-function renderArchivePruneErrors(errors: readonly string[]): string[] {
-    if (errors.length === 0) {
-        return ['- Errors: none'];
-    }
-
-    return ['- Errors:', ...errors.map((error) => `  - ${error}`)];
+    return `- \`${result.ref}\`: ${outcome}; ${result.scope}; archive ${archiveSha}${errors}.`;
 }
 
 function renderSkippedBranchSection(branch: SkippedBranchReport): string {
-    return [
-        `### \`${branch.name}\``,
-        `- Classification: \`${branch.classification}\``,
-        `- Ref: \`${branch.ref}\``,
-        `- Reason codes: ${renderReasonCodes(branch.reasonCodes)}`,
-        ...branch.reasonDetails.map((detail) => `- Detail: ${detail}`),
-    ].join('\n');
+    const details = branch.reasonDetails.slice(0, 1);
+    const detailText = details.length === 0 ? '' : `; ${details.join('; ')}`;
+
+    return `- \`${branch.name}\`: skipped: ${renderHumanReasonList(branch.reasonCodes)}; ref \`${branch.ref}\`${detailText}.`;
 }
 
 function renderDetachedWorktreeSection(
     worktree: DetachedWorktreeReport,
 ): string {
     return [
-        `### \`${worktree.path}\``,
-        `- Classification: \`${worktree.classification}\``,
-        `- Reason codes: ${renderReasonCodes(worktree.reasonCodes)}`,
-        `- Opinion: \`${worktree.opinion.code}\` because ${worktree.opinion.reason}`,
-        `- Head commit: \`${worktree.headCommit.shortSha}\` ${worktree.headCommit.subject} (${worktree.headCommit.dateIso.slice(0, 10)} by ${worktree.headCommit.author})`,
-        `- State: status=${worktree.state.status}, headOnBase=${worktree.state.headOnBase}, headReflogAvailable=${worktree.state.headReflogAvailable}, headReflogUniqueCommitCount=${worktree.state.headReflogUniqueCommitCount}, repositoryWorktreeDirtyCount=${worktree.state.repositoryWorktreeDirtyCount}, repositoryUnreachableCommitsAvailable=${worktree.state.repositoryUnreachableCommitsAvailable}, repositoryUnreachableCommitCount=${worktree.state.repositoryUnreachableCommitCount}, safeToRemoveManually=${worktree.state.safeToRemoveManually}, statusLines=${worktree.state.statusLineCount}`,
-        ...worktree.reasonDetails.map((detail) => `- Detail: ${detail}`),
+        `- \`${worktree.path}\`: ${renderDetachedClassificationSummary(worktree)}; head \`${worktree.headCommit.shortSha}\` ${worktree.headCommit.subject}.`,
         ...renderStatusLines(worktree.statusLines),
     ].join('\n');
 }
 
+function renderDetachedClassificationSummary(
+    worktree: DetachedWorktreeReport,
+): string {
+    return `needs review: ${renderHumanReasonList(worktree.reasonCodes)}`;
+}
+
 function renderStatusLines(statusLines: readonly string[]): string[] {
     if (statusLines.length === 0) {
-        return ['- Status lines: none'];
+        return [];
     }
 
-    const lines = ['- Status lines:'];
+    const visibleStatusLines = statusLines.slice(0, 3);
+    const hiddenCount = statusLines.length - visibleStatusLines.length;
+    const hiddenSummary = hiddenCount === 0 ? '' : `; +${hiddenCount} more`;
 
-    for (const statusLine of statusLines) {
-        lines.push(`  - \`${statusLine}\``);
+    return [
+        `  - Changes: ${visibleStatusLines.map((statusLine) => `\`${statusLine}\``).join('; ')}${hiddenSummary}.`,
+    ];
+}
+
+function renderHumanReasonList(reasonCodes: readonly string[]): string {
+    if (reasonCodes.length === 0) {
+        return 'manual check required';
     }
 
-    return lines;
+    const uniqueReasons = Array.from(
+        new Set(reasonCodes.map((reasonCode) => renderHumanReason(reasonCode))),
+    );
+    const visibleReasons = uniqueReasons.slice(0, 3);
+    const hiddenCount = uniqueReasons.length - visibleReasons.length;
+    const suffix = hiddenCount === 0 ? '' : `; +${hiddenCount} more`;
+
+    return `${visibleReasons.join('; ')}${suffix}`;
+}
+
+function renderHumanReason(reasonCode: string): string {
+    return (
+        HUMAN_REASON_LABELS.get(reasonCode) ?? reasonCode.replaceAll('_', ' ')
+    );
+}
+
+function renderCountIfPresent(
+    count: number,
+    singularLabel: string,
+    pluralLabel: string,
+): string[] {
+    if (count === 0) {
+        return [];
+    }
+
+    return [`${count} ${count === 1 ? singularLabel : pluralLabel}`];
 }
