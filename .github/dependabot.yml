@@ -16,3 +16,7 @@ updates:
           day: monday
           time: '06:00'
           timezone: America/Denver
+      cooldown:
+          semver-patch-days: 3
+          semver-minor-days: 14
+          semver-major-days: 30
