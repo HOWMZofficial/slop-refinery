@@ -20,3 +20,7 @@ updates:
           semver-patch-days: 3
           semver-minor-days: 14
           semver-major-days: 30
+      ignore:
+          - dependency-name: '@types/node'
+            update-types:
+                - 'version-update:semver-major'
