@@ -1,4 +1,13 @@
 import { recommendedConfig } from '../src/eslint-plugin/index.ts';
+import { slopRefinery } from '../src/eslint-plugin/plugin.ts';
+import textEslintParser from '../src/eslint-plugin/text-eslint-parser.ts';
+
+const NODE_VERSION_ALIGNMENT_FILES = [
+    'package.json',
+    '.github/dependabot.yml',
+    '.github/workflows/*.yml',
+    '.github/workflows/*.yaml',
+];
 
 const config = [
     {
@@ -8,6 +17,18 @@ const config = [
         ],
     },
     ...recommendedConfig,
+    {
+        files: NODE_VERSION_ALIGNMENT_FILES,
+        languageOptions: {
+            parser: textEslintParser,
+        },
+        plugins: {
+            'slop-refinery': slopRefinery,
+        },
+        rules: {
+            'slop-refinery/node-version-alignment': 'error',
+        },
+    },
     {
         files: [
             'eslint/**/*.ts',

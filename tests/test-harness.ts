@@ -31,6 +31,14 @@ export function createTypeScriptRuleTester(): any {
     });
 }
 
+export function createTextRuleTester(parser: any): any {
+    return new RuleTester({
+        languageOptions: {
+            parser,
+        },
+    });
+}
+
 export function repoPath(...segments: string[]): string {
     return path.join(process.cwd(), ...segments);
 }
