@@ -37,10 +37,7 @@ type FeatureArchiveRefs = {
 };
 
 type GitCleanupStressLocalMode =
-    | 'clean'
-    | 'detached'
-    | 'hidden_ref'
-    | 'tag_reflog';
+    'clean' | 'detached' | 'hidden_ref' | 'tag_reflog';
 type GitCleanupStressRemoteMode =
     | 'absent_no_upstream'
     | 'clean'
@@ -741,8 +738,7 @@ function expectRemoteArchiveTransactionFailedWithoutArchive(
 function expectFeatureDeletedLocallyAndRemotely(
     fixture: GitFixture,
     applyResult:
-        | NonNullable<GitCleanupReportType['applyResults']>[number]
-        | undefined,
+        NonNullable<GitCleanupReportType['applyResults']>[number] | undefined,
     remoteFeatureSha: string,
 ): void {
     const localArchiveBranch = ensurePresent(
@@ -777,8 +773,7 @@ function expectFeatureDeletedLocallyAndRemotely(
 function expectHostedFeatureDeletedLocallyAndRemotely(
     fixture: GitFixture,
     applyResult:
-        | NonNullable<GitCleanupReportType['applyResults']>[number]
-        | undefined,
+        NonNullable<GitCleanupReportType['applyResults']>[number] | undefined,
     remoteFeatureSha: string,
 ): void {
     const localArchiveBranch = ensurePresent(
@@ -806,8 +801,7 @@ function expectHostedFeatureDeletedLocallyAndRemotely(
 function expectHostedAbsentFeatureDeletedLocally(
     fixture: GitFixture,
     applyResult:
-        | NonNullable<GitCleanupReportType['applyResults']>[number]
-        | undefined,
+        NonNullable<GitCleanupReportType['applyResults']>[number] | undefined,
     localFeatureSha: string,
 ): void {
     const localArchiveBranch = ensurePresent(
@@ -2585,8 +2579,7 @@ function expectRemoteDriftRestoredLocalBranch(
     secondClonePath: string,
     applyReport: GitCleanupReportType,
     applyResult:
-        | NonNullable<GitCleanupReportType['applyResults']>[number]
-        | undefined,
+        NonNullable<GitCleanupReportType['applyResults']>[number] | undefined,
 ): void {
     expect(applyResult?.localBranchDeleted).toBe(false);
     expect(applyResult?.localBranchSkippedReason).toContain(
