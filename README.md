@@ -51,7 +51,9 @@ In practice, the easiest adoption path is still `slop-refinery-setup`. That setu
 
 This repo also includes `slop-refinery-eslint-tests`, a focused skill for writing tests for custom ESLint rules without assuming a fixed directory layout.
 
-The scripts it sets up are:
+Use `slop-refinery-system-decomposition` when an AI is spinning on a solution and needs to rebuild shared understanding through a concept graph before continuing.
+
+The setup skill wires these scripts:
 
 - `format`
 - `lint`
@@ -86,6 +88,7 @@ Current skills:
 - `slop-refinery-eslint-tests`: writes tests for custom ESLint rules while following the repo's existing test layout.
 - `slop-refinery-setup`: adopts the `slop-refinery` skills and package in a repository.
 - `slop-refinery-quick-checks`: runs the repository's fast automated checks after each set of changes.
+- `slop-refinery-system-decomposition`: decomposes a stalled problem into a concept graph and walks it with the user until the solution is apparent.
 
 ## ESLint Plugin
 
