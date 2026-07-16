@@ -47,9 +47,11 @@ Then use `slop-refinery-setup` in the target repository. It will guide the AI to
 
 In practice, the easiest adoption path is still `slop-refinery-setup`. That setup skill tells your AI to install the package, create the repository scripts, and update the agent instructions file so those checks run after code changes.
 
-`slop-refinery-quick-checks` is meant to be the fast validation loop. It should run the automated checks that are quick enough to execute after each set of changes an AI makes, not only at the end of a longer task.
+`slop-refinery-quick-checks` is meant to be the fast validation loop. It runs formatting, linting, type checking, and an irreducible-simplicity review after each set of changes an AI makes, not only at the end of a longer task.
 
 This repo also includes `slop-refinery-eslint-tests`, a focused skill for writing tests for custom ESLint rules without assuming a fixed directory layout.
+
+Use `slop-refinery-irreducible-simplicity` to reduce a design, implementation, or other target to the smallest form that preserves its essential purpose. Use `slop-refinery-pipeline` for the full feature lifecycle: issue and draft PR setup, implementation, parallel analysis, human review findings, final checks, and publication.
 
 The scripts it sets up are:
 
@@ -84,8 +86,10 @@ The CLI targets the repository identified by the current checkout's `origin` Git
 Current skills:
 
 - `slop-refinery-eslint-tests`: writes tests for custom ESLint rules while following the repo's existing test layout.
+- `slop-refinery-irreducible-simplicity`: removes or merges everything that is not essential to a target's purpose.
+- `slop-refinery-pipeline`: implements a feature through issue and PR setup, implementation, parallel review, human gates, final checks, and publication.
 - `slop-refinery-setup`: adopts the `slop-refinery` skills and package in a repository.
-- `slop-refinery-quick-checks`: runs the repository's fast automated checks after each set of changes.
+- `slop-refinery-quick-checks`: runs formatting, linting, type checking, and an irreducible-simplicity review after each set of changes.
 
 ## ESLint Plugin
 

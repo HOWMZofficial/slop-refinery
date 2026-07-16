@@ -10,3 +10,4 @@ Run the following commands when they exist in the repo, and fix resulting proble
 1. `npm run format`
 2. `npm run lint`
 3. `npm run typecheck`
+4. skill: `slop-refinery-irreducible-simplicity`
