@@ -14,6 +14,7 @@ Make the target repo work with:
 - Prettier
 - `format`, `lint`, and `typecheck`
 - the `slop-refinery-quick-checks` skill
+- the `slop-refinery-irreducible-simplicity` skill
 
 The TypeScript templates in `references/templates/typescript/` are merge targets, not blind replacements.
 
@@ -42,21 +43,27 @@ Workaround for the current `skills` dotfile-copy bug:
 npx skills add HOWMZofficial/slop-refinery --skill slop-refinery-quick-checks -y
 ```
 
-6. Ensure the ESLint config imports `recommendedConfig`.
+6. Ensure `slop-refinery-irreducible-simplicity` is installed. If it is missing, install it with:
+
+```bash
+npx skills add HOWMZofficial/slop-refinery --skill slop-refinery-irreducible-simplicity -y
+```
+
+7. Ensure the ESLint config imports `recommendedConfig`.
     - Do not turn off, ignore, override, or weaken any rules from `recommendedConfig`.
     - Apply `recommendedConfig` as broadly as possible.
     - If the repo has no existing ESLint file-pattern scoping, use the broadest applicable JS/TS file set.
     - If the repo already applies ESLint to JS/TS source files, apply `recommendedConfig` to those same file families as well.
-7. Ensure the format config imports `formatConfig`.
-8. Ensure the repo has:
+8. Ensure the format config imports `formatConfig`.
+9. Ensure the repo has:
     - `typecheck`
     - `format`
     - `lint`
     - agent instructions in the repo's existing instruction file:
       use `AGENTS.md` when present
       otherwise, if `CLAUDE.md` exists, merge the guidance there instead of creating `AGENTS.md`
-9. Install dependencies.
-10. Run `slop-refinery-quick-checks` and fix any issues it surfaces.
+10. Install dependencies.
+11. Run `slop-refinery-quick-checks` and fix any issues it surfaces.
     - Expect validation to fail during setup. That is normal.
     - It is common for setup to surface many linting errors at first.
     - Fix the code or setup until validation passes.
