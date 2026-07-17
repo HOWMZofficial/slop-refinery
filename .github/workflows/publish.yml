@@ -4,6 +4,7 @@ on:
     push:
         branches:
             - main
+    workflow_dispatch:
 
 permissions:
     contents: read
@@ -15,6 +16,7 @@ concurrency:
 
 jobs:
     publish:
+        if: github.event_name == 'push' || github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
         timeout-minutes: 20
 
@@ -24,10 +26,11 @@ jobs:
               with:
                   fetch-depth: 0
 
-            - name: Determine whether this push should publish
+            - name: Determine whether this run should publish
               id: version_gate
               env:
                   BEFORE_SHA: ${{ github.event.before }}
+                  EVENT_NAME: ${{ github.event_name }}
               run: |
                   node <<'NODE'
                   const fs = require('node:fs');
@@ -98,16 +101,6 @@ jobs:
                       return parsedLeft.prerelease.localeCompare(parsedRight.prerelease);
                   }
 
-                  const beforeSha = process.env.BEFORE_SHA ?? '';
-
-                  if (beforeSha === '' || /^0+$/.test(beforeSha)) {
-                      appendOutput('package_name', readJson('package.json').name);
-                      appendOutput('package_version', readJson('package.json').version);
-                      appendOutput('should_publish', 'false');
-                      appendOutput('reason', 'No previous main commit was available for comparison.');
-                      process.exit(0);
-                  }
-
                   const currentPackage = readJson('package.json');
                   const currentLock = readJson('package-lock.json');
                   const currentPackageVersion = currentPackage.version;
@@ -118,6 +111,23 @@ jobs:
                       fail(
                           `package.json version (${currentPackageVersion}) must match package-lock.json versions (${currentLockVersion} / ${currentLockRootVersion}).`,
                       );
+                  }
+
+                  appendOutput('package_name', currentPackage.name);
+                  appendOutput('package_version', currentPackageVersion);
+
+                  if (process.env.EVENT_NAME === 'workflow_dispatch') {
+                      appendOutput('should_publish', 'true');
+                      appendOutput('reason', 'Manual publish requested from main.');
+                      process.exit(0);
+                  }
+
+                  const beforeSha = process.env.BEFORE_SHA ?? '';
+
+                  if (beforeSha === '' || /^0+$/.test(beforeSha)) {
+                      appendOutput('should_publish', 'false');
+                      appendOutput('reason', 'No previous main commit was available for comparison.');
+                      process.exit(0);
                   }
 
                   const previousPackage = readGitJson(`${beforeSha}:package.json`);
@@ -133,9 +143,6 @@ jobs:
                           `package.json version (${currentPackageVersion}) and package-lock.json version (${currentLockVersion}) must increase together relative to ${beforeSha} (${previousPackageVersion} / ${previousLockVersion}).`,
                       );
                   }
-
-                  appendOutput('package_name', currentPackage.name);
-                  appendOutput('package_version', currentPackageVersion);
 
                   if (!packageIncreased) {
                       appendOutput('should_publish', 'false');
