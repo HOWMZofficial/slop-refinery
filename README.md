@@ -1,8 +1,12 @@
 # Slop Refinery
 
-Even the best frontier coding models generate AI slop by default. They can produce code that works well enough to ship a feature, but not code that is consistently clean. `slop-refinery` exists to help AI agents refine that output into clean code.
+`slop-refinery` combines three parts that keep agent-written code clean:
 
-Clean code, in this repo, means code that is correct, simple, and maintainable.
+- Run `slop-refinery-setup` once. It installs the skills, Prettier, strict ESLint rules, TypeScript checks, and instructions in `AGENTS.md` or `CLAUDE.md`.
+- For routine changes, those instructions tell the agent to run `slop-refinery-quick-checks`. It formats, lints, type-checks, and reviews the change for irreducible simplicity.
+- For feature work, use `slop-refinery-pipeline`. It takes the feature through a much more thorough process, with you approving the plan before implementation and the result before completion.
+
+Setup and quick checks keep everyday work clean. The pipeline is what to reach for when building a feature.
 
 ```mermaid
 flowchart LR
@@ -13,116 +17,71 @@ flowchart LR
     C -.- F["Maintainable"]
 ```
 
-## Index
+## Set up a repository
 
-- [Installation](#installation)
-- [Usage](#usage)
-- [TypeScript API](#typescript-api)
-- [CLI](#cli)
-- [Skills](#skills)
-- [ESLint Plugin](#eslint-plugin)
-- [Clean Code](#clean-code)
-- [Correct](#correct)
-- [Simple](#simple)
-- [Maintainable](#maintainable)
-
-## Installation
-
-Use `npx skills`. For most repositories, start with the setup skill.
+Install the setup skill in a TypeScript repository:
 
 ```bash
 npx skills add HOWMZofficial/slop-refinery --skill slop-refinery-setup
 ```
 
-Then use `slop-refinery-setup` in the target repository. It will guide the AI to wire up the package, configs, scripts, and agent instructions.
+Then tell your coding agent:
 
-## Usage
-
-`slop-refinery` is a single npm package with three surfaces:
-
-- `slop-refinery` for the ruleset CLI
-- `slop-refinery` for the git cleanup CLI
-- `slop-refinery` for the TypeScript ruleset API
-- `slop-refinery/eslint-plugin` for the ESLint plugin and configs
-
-In practice, the easiest adoption path is still `slop-refinery-setup`. That setup skill tells your AI to install the package, create the repository scripts, and update the agent instructions file so those checks run after code changes.
-
-`slop-refinery-quick-checks` is meant to be the fast validation loop. It runs formatting, linting, type checking, and an irreducible-simplicity review after each set of changes an AI makes, not only at the end of a longer task.
-
-This repo also includes `slop-refinery-eslint-tests`, a focused skill for writing tests for custom ESLint rules without assuming a fixed directory layout.
-
-Use `slop-refinery-irreducible-simplicity` to reduce a design, implementation, or other target to the smallest form that preserves its essential purpose. Use `slop-refinery-pipeline` for the full feature lifecycle: issue and draft PR setup, implementation, parallel analysis, human review findings, final checks, and publication.
-
-The scripts it sets up are:
-
-- `format`
-- `lint`
-- `typecheck`
-
-## TypeScript API
-
-```ts
-import { buildGitCleanupReport, pullRuleset, pushRuleset } from 'slop-refinery';
+```text
+Use slop-refinery-setup in this repository.
 ```
 
-The root package exports the ruleset library API, the git cleanup library API, and file helpers like `readRulesetFile`, `writeRulesetFile`, `getDefaultRulesetPath`, and `normalizeRuleset`.
+The setup skill preserves the repository's existing conventions while it:
 
-## CLI
+- installs the other four Slop Refinery skills
+- configures the `slop-refinery` ESLint rules, Prettier, and TypeScript
+- adds `format`, `lint`, and `typecheck` scripts
+- updates the repository's agent instructions
+- adds the pipeline checklist to the GitHub pull request template without deleting repository-specific content
+- installs dependencies and fixes setup problems until the checks pass
+
+## Build a feature with the pipeline
+
+Use the pipeline for a feature that should go through the full GitHub workflow:
+
+```text
+Use slop-refinery-pipeline to implement <feature>.
+```
+
+The pipeline changes Git and GitHub state. It creates commits, pushes the branch, opens or updates the pull request, and can enable auto-merge. Use `slop-refinery-quick-checks` instead when you only want to validate local changes.
+
+The pipeline works in this order:
+
+1. It creates a feature branch, draft pull request, and linked issue. The draft starts with the installed pull request template.
+2. It works with you until the problem and the smallest sound plan are clear. It waits for your permission before implementation.
+3. It implements the feature, commits and pushes it, then runs thirteen independent reviews covering behavior, testing, design, code, edge cases, security, performance, and user experience.
+4. It fixes clear problems. It records consequential choices, compatibility concerns, blockers, and disproportionate edge cases as unchecked tasks in the pull request for you to decide.
+5. After that review, it syncs with the latest `main`, audits the final diff and files, runs every required check, and commits and pushes any fixes.
+6. It waits for your final permission before marking the pull request ready and enabling auto-merge.
+
+## Other skills
+
+- `slop-refinery-quick-checks`: formats, lints, type-checks, and simplifies the current changes until all checks pass.
+- `slop-refinery-irreducible-simplicity`: removes everything that is not needed for a target's essential purpose.
+- `slop-refinery-eslint-tests`: writes focused Vitest coverage for custom ESLint rules, with ten valid and ten invalid examples per rule.
+
+## Package tools
+
+The [`slop-refinery`](https://www.npmjs.com/package/slop-refinery) npm package also provides an ESLint plugin, ruleset commands, Git cleanup commands, and a TypeScript API.
 
 ```bash
 slop-refinery ruleset pull
 slop-refinery ruleset push
 slop-refinery git-cleanup
+slop-refinery git-cleanup --apply --keep-archives
 slop-refinery git-cleanup --prune-archives
-npx slop-refinery git-cleanup --apply --keep-archives
 ```
 
-The CLI targets the repository identified by the current checkout's `origin` Git remote. It requires `gh` to be installed and authenticated for ruleset access.
-
-`slop-refinery git-cleanup` audits local branches and worktrees against `origin`'s live default branch. `npx slop-refinery git-cleanup --apply` only deletes branches when both the local branch history and the live `origin` branch are already preserved on that canonical base, no linked worktree still points at the branch, and no rewrite overlays are active. It archives branch names during the operation, then prunes redundant tool-managed archive refs after their tips and reflogs are proven preserved on the live canonical base. Use `--keep-archives` with `--apply` to retain those safety refs for manual review. `slop-refinery git-cleanup --prune-archives` can also run standalone to clean up older redundant archives.
-
-## Skills
-
-Current skills:
-
-- `slop-refinery-eslint-tests`: writes tests for custom ESLint rules while following the repo's existing test layout.
-- `slop-refinery-irreducible-simplicity`: removes or merges everything that is not essential to a target's purpose.
-- `slop-refinery-pipeline`: implements a feature through issue and PR setup, implementation, parallel review, human gates, final checks, and publication.
-- `slop-refinery-setup`: adopts the `slop-refinery` skills and package in a repository.
-- `slop-refinery-quick-checks`: runs formatting, linting, type checking, and an irreducible-simplicity review after each set of changes.
-
-## ESLint Plugin
-
-This repo publishes [`slop-refinery`](https://www.npmjs.com/package/slop-refinery). The ESLint plugin lives at the `slop-refinery/eslint-plugin` subpath.
+The ruleset commands use the current checkout's `origin` repository and require an authenticated `gh` CLI. `git-cleanup` audits local branches and worktrees. `--apply` removes only branches proven to be preserved on the live default branch, `--keep-archives` keeps its safety refs, and `--prune-archives` removes redundant archives.
 
 ```ts
+import { buildGitCleanupReport, pullRuleset, pushRuleset } from 'slop-refinery';
 import { formatConfig, recommendedConfig } from 'slop-refinery/eslint-plugin';
 ```
 
-The ESLint plugin attempts to codify and automate best practices that are quick and easy for an AI agent to verify against.
-
-Many of the rules are off-the-shelf. Some are custom.
-
-AI now makes it practical to create more elaborate ESLint rules that would have been too expensive or tedious to build before. `slop-refinery` is meant to be a solid general-purpose base, not the final word.
-
-You should create your own ESLint rules with AI for the conventions and architectural constraints that matter in your codebase.
-
-## Clean Code
-
-`slop-refinery` defines clean code as code that is:
-
-- correct
-- simple
-- maintainable
-
-### Correct
-
-Correct code behaves as intended under normal, edge, adversarial, and high-scale conditions.
-
-### Simple
-
-Simple code is easy to read and easy to reason about. It uses just enough code to get the job done, but no more, and avoids unnecessary complexity.
-
-### Maintainable
-
-Maintainable code is easy to change without breaking unrelated behavior. It stays understandable and retains the properties of correctness and simplicity as the codebase grows.
+The root API provides ruleset, Git cleanup, and file helpers. The ESLint subpath provides the lint and format configs.

@@ -1,6 +1,7 @@
 ---
 name: slop-refinery-eslint-tests
 description: Write tests for custom ESLint rules. Use this when adding or updating rules and you need matching coverage in the repo's ESLint test layout, defaulting to eslint/custom-rules and eslint/tests when no layout exists yet.
+license: MIT
 ---
 
 # ESLint Tests
