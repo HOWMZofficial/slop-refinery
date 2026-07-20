@@ -1,6 +1,7 @@
 ---
 name: slop-refinery-irreducible-simplicity
 description: Reduces a target to the smallest form that preserves its essential purpose.
+license: MIT
 ---
 
 UNDER_REVIEW is the target the user wants simplified.

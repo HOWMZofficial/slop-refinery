@@ -1,6 +1,7 @@
 ---
 name: slop-refinery-quick-checks
 description: Run all automated checks below and fix resulting problems to quickly ensure some level of code quality and correctness.
+license: MIT
 ---
 
 Use this skill for the fast validation loop after each set of changes an AI makes.

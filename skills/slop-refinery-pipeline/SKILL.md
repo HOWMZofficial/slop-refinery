@@ -1,6 +1,7 @@
 ---
 name: slop-refinery-pipeline
 description: Implement a feature through a concise autonomous pipeline with human gates for planning, consequential findings, and merge authorization. Use when a feature needs issue and PR setup, implementation, testing, review, final checks, and publication.
+license: MIT
 ---
 
 Execute this pipeline for the supplied feature:

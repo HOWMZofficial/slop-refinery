@@ -1,0 +1,19 @@
+- [ ] Initial deliberation and planning
+- [ ] Implementation
+- [ ] Parallel subagent checks
+    - [ ] Backward compatibility
+    - [ ] Manual testing
+    - [ ] Automated testing
+    - [ ] System design irreducible simplicity
+    - [ ] Implementation irreducible simplicity
+    - [ ] Edge cases
+    - [ ] Declarativeness
+    - [ ] Modularity
+    - [ ] Immutability
+    - [ ] Abstractness
+    - [ ] Performance
+    - [ ] Security
+    - [ ] Frontend UI/UX
+- [ ] Human findings deliberation
+- [ ] Final checks
+- [ ] Ready and auto-merge authorized
