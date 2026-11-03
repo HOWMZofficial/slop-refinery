@@ -1,2 +1,8 @@
-- After all code changes, run the `slop-refinery-quick-checks` skill.
-- Never disable lint rules just to get around lint errors. Fix the source of the lint errors.
+- After making any code change whatsoever, you should always run these commands/skills in the following order. You should fix any problems that the commands/skills surface. You should rerun all commands/skills from the beginning after any change:
+    - `npm run format`
+    - `npm run typecheck`
+    - `npm run lint`
+    - skill: `slop-refinery-static-security-analysis`
+    - skill: `slop-refinery-code-cleanliness`
+- Make a failing check pass by fixing its cause. Evaluate proposed changes to checks, including lint suppressions, with `slop-refinery-human-judgment`, rather than treating them as inherently human decisions.
+- Evaluate each lint finding in context and preserve intended behavior. Treat suggested fixes as proposals to assess, and use `slop-refinery-human-judgment` for exceptions or behavior changes.
