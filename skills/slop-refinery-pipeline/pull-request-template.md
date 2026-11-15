@@ -1,0 +1,25 @@
+- [ ] Linked issue
+- [ ] Deliberation
+- [ ] Implementation
+- [ ] AI review
+    - [ ] Backward compatibility
+    - [ ] Manual testing
+    - [ ] Automated testing
+    - [ ] System design irreducible simplicity
+    - [ ] Implementation irreducible simplicity
+    - [ ] Edge cases
+    - [ ] Declarativeness
+    - [ ] Modularity
+    - [ ] Immutability
+    - [ ] Abstractness
+    - [ ] Performance
+    - [ ] Security
+    - [ ] Frontend UI/UX
+- [ ] Human review
+- [ ] Final checks
+    - [ ] Latest main and intended diff
+    - [ ] Intended behavior
+    - [ ] Supabase preview
+    - [ ] Migration safety
+    - [ ] Read-only production Supabase MCP
+    - [ ] All local and CI/CD checks

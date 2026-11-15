@@ -1,40 +1,61 @@
 ---
 name: slop-refinery-pipeline
-description: Implement a feature through a concise autonomous pipeline with human gates for planning, consequential findings, and merge authorization. Use when a feature needs issue and PR setup, implementation, testing, review, final checks, and publication.
-license: MIT
+description: Implement a feature through an effective and efficient software factory pipeline. Use only when invoked explicitly.
 ---
 
-Execute this pipeline for the supplied feature:
+Pause for the human only at steps 6, 7, and 14. Everywhere else, proceed without asking, through marking the PR ready and enabling auto-merge.
 
-1. Prepare the issue and PR:
-    1. Create an appropriately named feature branch.
-    2. Create and push an empty commit with the exact message `Initial empty commit to open PR`.
-    3. Open a draft PR using the unchanged PR template as the verbatim starting text of its first comment.
-    4. Use the supplied GitHub issue, reuse an existing matching issue, or create one from the feature description.
-    5. Link the issue in the PR's Development section so merging closes it.
-2. Execute the pipeline sequentially. Allow human interaction only for initial deliberation, implementation permission, findings deliberation, and final readiness permission. After implementation is authorized, work autonomously through step 2.3, pause for step 2.4, then complete step 2.5 autonomously before requesting final readiness permission; use best judgment, complete all unblocked work, check each completed PR checkbox, and use those checkboxes to recover progress.
-    1. Deliberate with the human until the problem and an irreducibly simple implementation plan are sufficiently defined. Explicitly agree on every changed or introduced seam, interface, and API, especially exposed HTTP endpoints and database tables.
-    2. With explicit human permission, implement the feature completely, then commit and push all changes.
-    3. Run the following thirteen analyses in parallel, each in a fresh, context-independent subagent over the entire current branch change set, including uncommitted changes. Give each subagent the feature intent, change scope, repository instructions, and only its assigned analysis; it must not edit files, change Git or PR state, or see another subagent's work, and must report evidence, findings, recommendations, test results, and blockers to the main orchestrator. Use isolated transient test state where concurrent testing could interfere.
-        1. **Backward compatibility:** Report every definite or possible mechanism preserving an old interface, behavior, schema, format, version, or implementation path, with evidence for human review; do not propose or make changes.
-        2. **Manual testing:** Exercise every materially affected workflow through its real interface under realistic success, boundary, invalid-input, failure, permission, persistence, accessibility, viewport, and integration scenarios; assess end-to-end behavioral correctness and report evidence and defects.
-        3. **Automated testing:** Run proportionate tests and identify missing coverage, defaulting recommendations to meaningful property-based or model-based tests with independent properties and supplementing them with examples, integration tests, or end-to-end tests where those provide distinct evidence. Do not run mutation testing or recommend changes to mutation-testing configuration.
-        4. **System design irreducible simplicity:** Identify requirements, behaviors, concepts, workflows, states, data models, seams, interfaces, and dependencies that can be removed or merged while preserving the feature's essential purpose and integrity constraints; assess the system design rather than the code that implements it.
-        5. **Implementation irreducible simplicity:** Given the feature's current system design, identify unnecessary code, state, branches, layers, dependencies, duplication, and indirection that can be removed while preserving every requirement and integrity constraint; assess the implementation rather than redesigning the feature.
-        6. **Edge cases:** Identify all practical edge cases across inputs, state transitions, timing, concurrency, permissions, persistence, failures, retries, integrations, and resource limits, and verify each is handled or mitigated. Report technically possible cases whose mitigation may be impractical or disproportionate with evidence, likelihood, impact, current safeguards, and trade-offs for human deliberation.
-        7. **Declarativeness:** Identify where intended rules, relationships, and outcomes could be expressed more directly through language, framework, schema, or data constructs.
-        8. **Modularity:** Assess module cohesion, public surfaces, dependencies, boundary leaks, cycles, shared state, broad interfaces, and unnecessary coupling.
-        9. **Immutability:** Identify state changes that could be more explicit, local, and predictable through immutable data flow or smaller mutation boundaries.
-        10. **Abstractness:** Identify duplication, leakage, premature generalization, pass-through layers, and indirection that fails to capture a stable concept or hides essential behavior.
-        11. **Performance:** Inspect affected paths under realistic load for practical latency, throughput, memory, I/O, query, rendering, serialization, concurrency, and unbounded-work risks, measuring when magnitude affects the finding.
-        12. **Security:** Trace trust boundaries and abuse paths, checking authentication, authorization, isolation, validation, injection, secrets, data exposure, dependencies, logging, failures, and resource exhaustion.
-        13. **Frontend UI/UX:** When the change set has user-visible graphical impact, inspect every materially affected interface and state in the real rendered application, not source code alone. Capture visual evidence at the minimum supported width, representative compact and large phones, portrait and landscape tablets, and desktop, plus immediately below and above every affected responsive breakpoint and through a continuous resize sweep across the supported range; emulate touch for phones and tablets. Against the product's established design language, assess visual hierarchy, typography, color and contrast, spacing and density, responsive adaptation, clipping, overlap, overflow, component consistency, loading, empty, error, success, dense, and post-interaction states, touch targets, hover independence, scrolling, gestures, focus and virtual-keyboard behavior, safe areas, dynamic viewport and orientation behavior, motion, feedback, and navigation; require a polished, cohesive experience that feels native to phone and tablet form factors rather than like scaled-down desktop UI. Report tested viewport and state combinations, evidence, defects, exclusions, and blockers; when no graphical interface is affected, report not applicable with change-set evidence.
+## Setup
 
-        After all reports return, the main orchestrator must validate and adjudicate them, implement what it judges best, directly validate its changes, and commit and push. The orchestrator alone determines which findings are consequential subjective matters for step 2.4, but must carry every backward-compatibility finding and every edge-case finding whose mitigation may be impractical or disproportionate into that step without implementing it.
+1. Create a feature branch.
+2. Update the branch with the latest `origin/main` and verify that it is not behind.
+3. Create and push an empty commit so a PR can be opened.
+4. Open a draft PR. Start its description with the unchanged contents of `pull-request-template.md` from this skill's directory. Its boxes track progress: check each when its step completes or does not apply, and each section only after all its steps are complete. On resuming, continue from the first unchecked box.
+5. Link the correct issue in the PR's Development section so merging closes it. Use the issue supplied with the skill, otherwise an existing matching issue, otherwise a new issue.
 
-    4. Record and deliberate with the human on every consequential subjective finding, blocker, backward-compatibility finding, and edge-case finding whose mitigation may be impractical or disproportionate:
-        1. Create or update one `## Human Review Findings` section at the end of the PR description; do not create a repository findings file, and write `No findings require human review.` when none exist.
-        2. Represent each finding as an unchecked `- [ ] **<title>**` task containing its review area, affected code, evidence, consequence, implemented resolution or blocker, material alternatives and trade-offs, and the decision or confirmation needed.
-        3. Never check a finding for the human. On reruns, preserve human checkbox states and notes, add new findings unchecked, and explain rather than delete findings that no longer apply.
-    5. Perform final checks: Fetch and integrate fresh `origin/main`, verify the branch is zero commits behind, and audit the diff, committed paths, and untracked files for unrelated lockfiles, unnecessary Markdown specifications, logs, generated or local artifacts, and sensitive data. Verify new migrations are chronologically after base migrations, replay cleanly, upgrade production-like data safely, avoid unintended destruction, and can perform any intentional destruction under enforced production preconditions; restore any weakening of lint or test enforcement relative to the base, run every required check, refetch the base, restart if it advanced, and commit and push any final fixes.
-    6. With explicit human permission, convert the PR from draft to ready and enable auto-merge.
+## Deliberation
+
+6. Lead deliberation, asking questions and guiding the conversation until you and the human agree on the full problem and an irreducibly simple, complete plan. The plan describes intended behavior, expected load, and meaningful tradeoffs; choose technical implementation details yourself. Review the proposed plan for foreseeable issues and use [slop-refinery-human-judgment](../slop-refinery-human-judgment/SKILL.md) to identify what you can resolve, what needs a human decision, and what is blocked. Discuss the human decisions and resolve blockers needed to agree on the plan. Record each agreement in the linked issue's `# Agreed plan` section; that issue is the source of truth, linked from the PR description. Keep guiding the next unresolved decision. When the plan is agreed and recorded, tell the human deliberation is complete.
+
+## Implementation
+
+7. Ask for permission to implement. After approval, implement the entire agreed plan.
+8. Commit and push every intended change.
+9. Wait for every CI/CD check that applies to a draft PR to pass on the current commit. Handle static security findings with [slop-refinery-static-security-analysis](../slop-refinery-static-security-analysis/SKILL.md). Do the following in a loop: fix failures, push the fixes, and wait again.
+
+## AI Review
+
+10. Run these thirteen reviews in parallel with fresh, independent subagents. Read the current agreed plan from the linked issue and give each subagent that plan and only the description of its own review. The implementation it reviews is everything the branch changes relative to `origin/main`. Start the application once before dispatching and tell each subagent it is running and not to restart it. Each subagent should only produce candidate findings with evidence and anything it could not check; it changes nothing in the repository, in Git, or on the PR:
+    1. Backward compatibility: Using the agreed plan as the requirements, find every departure of the implementation from the standard in `slop-refinery-backward-compatibility`.
+    2. Manual testing: Find every departure of the implementation from the standard in `slop-refinery-manual-testing`.
+    3. Automated testing: Find every departure of the implementation from the standard in `slop-refinery-automated-testing`.
+    4. System design irreducible simplicity: Find every departure of the design from the standard in `slop-refinery-irreducible-simplicity`.
+    5. Implementation irreducible simplicity: Taking the agreed design as given, find every departure of the implementation from the standard in `slop-refinery-irreducible-simplicity`.
+    6. Edge cases: Find every departure of the implementation from the standard in `slop-refinery-edge-cases`.
+    7. Declarativeness: Find every departure of the implementation from the standard in `slop-refinery-declarativeness`.
+    8. Modularity: Find every departure of the implementation from the standard in `slop-refinery-modularity`.
+    9. Immutability: Find every departure of the implementation from the standard in `slop-refinery-immutability`.
+    10. Abstractness: Find every departure of the implementation from the standard in `slop-refinery-abstractness`.
+    11. Performance: Using the load in the agreed plan, find every departure of the implementation from the standard in `slop-refinery-performance`.
+    12. Security: Find every departure of the implementation from the standard in `slop-refinery-security`.
+    13. Frontend UI/UX: Find every departure of the implementation from the standard in `slop-refinery-frontend-ui-ux`.
+11. Run [slop-refinery-human-judgment](../slop-refinery-human-judgment/SKILL.md) once on all review findings and anything the reviewers could not verify, using the agreed plan.
+12. Automatically fix every finding classified as AI, then commit and push.
+13. For each finding classified as Human or Blocked, add an unchecked checkbox to the `# Findings requiring human judgment` section of the PR description. Give it a short title and these indented bullets:
+    - Description: What was found, the evidence, what the human must decide or provide, and why the AI cannot resolve it. For a blocker, say what is missing and what cannot be completed.
+    - Recommendation: What you recommend doing and why.
+    - Choices and consequences: Every credible choice, including doing nothing when credible, and what each choice would change.
+
+    The human must be able to decide or unblock every finding by reading the PR alone.
+
+## Human Review
+
+14. Invite the human to review and test the implementation. Discuss each finding together and agree on what to do. Carry out the decision, update the linked issue if the agreed plan changes, complete any blocked checks, record the result, and then check off the finding.
+
+## Final Checks
+
+15. Once the human has finished reviewing and every checkbox in `# Findings requiring human judgment` has been checked off, complete every final check in `slop-refinery-final-checks`. Check its box in the PR description only after it passes or does not apply.
+
+## Production
+
+16. After every checkbox from the checklist and every checkbox in `# Findings requiring human judgment` is checked, mark the PR ready. Wait for every PR CI/CD check to pass on the final commit, handling failures as in `slop-refinery-final-checks` step 6, then enable auto-merge.
